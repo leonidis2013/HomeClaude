@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>HomeClaude</title>
+<script>
+(function () {
+  var p = 'auto';
+  try { p = localStorage.getItem('hc-theme') || 'auto'; } catch (e) {}
+  var light = p === 'light' || (p === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+})();
+</script>
+<style>
+  /* Same palette, controls and settings layout as LiveCompanion, LiveMic and the LivePi web page */
+  :root { --bg:#0d1015; --card:#151a21; --card2:#1b2129; --line:#252c36; --fg:#d8dee6; --dim:#7c8794; --faint:#4c5561; --acc:#4c8dff; --teal:#2ec4b6; --bad:#ef4c4c; --ok:#3ecf6e; --warn:#f2c94c; --inset:#0b0e12; --knob:#d8dee6; --onacc:#0d1015; --shadow:#0008; --r:10px; color-scheme:dark; }
+  :root[data-theme=light] { --bg:#e9edf2; --card:#fbfcfd; --card2:#f0f3f6; --line:#d3dae3; --fg:#18202b; --dim:#586474; --faint:#97a1ae; --acc:#2563d6; --teal:#0f9488; --bad:#d63232; --ok:#23a056; --warn:#cf9a10; --inset:#e3e8ee; --knob:#ffffff; --onacc:#ffffff; --shadow:#0003; color-scheme:light; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { min-height:100vh; }
+  .hide { display:none !important; }
+  #app { padding:0 14px calc(20px + env(safe-area-inset-bottom)); }
+
+  header { display:flex; flex-wrap:wrap; gap:14px; align-items:center; padding:10px 14px; padding-top:calc(10px + env(safe-area-inset-top)); margin-bottom:14px;
+           background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10; }
+  h1 { font-size:15px; margin:0; letter-spacing:.12em; text-transform:uppercase; font-weight:800; }
+  h1 .ver { font-size:10px; font-weight:600; letter-spacing:.02em; text-transform:none; color:var(--dim); vertical-align:1px; margin-left:2px; }
+  h1 small { display:block; font-size:10px; letter-spacing:.04em; color:var(--dim); font-weight:400; text-transform:none; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--dim); margin:0 0 10px; font-weight:700; }
+  h2::before { content:""; display:inline-block; width:3px; height:11px; background:var(--acc); border-radius:2px; margin-right:7px; vertical-align:-1px; }
+
+  #status { flex:1; min-width:0; display:flex; gap:6px; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+  #status::-webkit-scrollbar { display:none; }
+  .st { flex:0 0 auto; display:inline-flex; align-items:center; gap:6px; background:var(--card2); border-radius:999px; padding:3px 10px; font-size:12px; color:var(--dim); white-space:nowrap; }
+  .st.bad { background:color-mix(in srgb, var(--bad) 18%, transparent); color:var(--bad); }
+  .st.warn { background:color-mix(in srgb, var(--warn) 16%, transparent); color:var(--warn); }
+  .st.ok { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--faint); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); } .dot.acc { background:var(--acc); }
+
+  select, input, button, textarea { background:var(--card2); color:var(--fg); border:1px solid transparent; border-radius:8px; padding:7px 11px; font:inherit; }
+  input:focus, select:focus, textarea:focus { outline:2px solid color-mix(in srgb, var(--acc) 55%, transparent); outline-offset:0; }
+  button { cursor:pointer; font-weight:600; touch-action:manipulation; }
+  button:hover { background:color-mix(in srgb, var(--card2) 80%, var(--fg) 8%); }
+  button:disabled, input:disabled { opacity:.35; cursor:not-allowed; }
+  button.on { background:var(--acc); color:var(--onacc); }
+  button.on:hover { background:color-mix(in srgb, var(--acc) 88%, var(--fg) 12%); }
+  button.danger { color:var(--bad); }
+  .seg { display:inline-flex; background:var(--card2); border-radius:9px; padding:3px; gap:2px; }
+  .seg button { border-radius:7px; background:transparent; padding:6px 12px; }
+  .seg button.on { background:var(--acc); color:var(--onacc); }
+  .note { color:var(--dim); font-size:12px; }
+  a { color:var(--acc); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  /* header buttons: settings turns into Done */
+  .gear { display:flex; align-items:center; justify-content:center; gap:6px; width:32px; height:32px; padding:0; border-radius:8px; background:transparent; color:var(--dim); }
+  .gear:hover { color:var(--fg); background:var(--card2); }
+  .gear svg { width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  .gear span { display:none; font-size:13px; }
+  .gear.on { width:auto; padding:0 12px; background:var(--acc); color:var(--onacc); }
+  .gear.on svg { display:none; } .gear.on span { display:inline; }
+  .gear.spin svg { animation:spin 1s linear infinite; }
+  #updAll { padding:6px 14px; }
+
+  /* ===== devices ===== */
+  #alerts { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+  #alerts:empty { display:none; }
+  .devs { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px, 1fr)); gap:12px; align-items:start; }
+  .dev { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--ok); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:9px; min-width:0; }
+  .dev.upd { border-left-color:var(--warn); }
+  .dev.off { border-left-color:var(--bad); }
+  .dev.busy { border-left-color:var(--acc); }
+  .dev.none { border-left-color:var(--faint); }
+  .dh { display:flex; align-items:center; gap:8px; min-width:0; }
+  .dn { flex:1; min-width:0; font-weight:700; font-size:13px; letter-spacing:.08em; text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dsub { font-size:12px; color:var(--dim); margin-top:-6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; }
+  .chip { font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:var(--card2); color:var(--dim); }
+  .chip.t { background:color-mix(in srgb, var(--teal) 16%, transparent); color:var(--teal); }
+  .rows { display:flex; flex-direction:column; border-top:1px solid var(--line); }
+  .row { display:grid; grid-template-columns:76px 1fr auto; gap:8px; align-items:center; min-height:38px; padding:5px 0; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .rl { font-size:10.5px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
+  .rv { min-width:0; font-size:13px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .rv small { display:block; font-size:11.5px; color:var(--dim); }
+  .rv .up { color:var(--warn); font-weight:700; } .rv .good { color:var(--ok); } .rv .bad { color:var(--bad); } .rv .arrow { color:var(--faint); padding:0 3px; }
+  .row button { padding:5px 12px; font-size:12.5px; }
+  .tag { font-size:11px; color:var(--dim); white-space:nowrap; }
+  .df { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .df .when { flex:1; min-width:90px; font-size:11.5px; color:var(--dim); }
+  .df button { padding:5px 11px; font-size:12.5px; }
+  .errbox { border:1px solid color-mix(in srgb, var(--bad) 55%, transparent); background:color-mix(in srgb, var(--bad) 10%, transparent); border-radius:8px; padding:7px 10px; font-size:12.5px; }
+  .errbox button { margin-top:6px; padding:4px 10px; font-size:12.5px; }
+  .okbox { border:1px solid color-mix(in srgb, var(--ok) 50%, transparent); background:color-mix(in srgb, var(--ok) 10%, transparent); border-radius:8px; padding:7px 10px; font-size:12.5px; }
+  .jobbox { border:1px solid color-mix(in srgb, var(--acc) 45%, transparent); background:color-mix(in srgb, var(--acc) 8%, transparent); border-radius:8px; padding:8px 10px; font-size:12.5px; display:flex; flex-direction:column; gap:5px; }
+  .jstep { display:flex; align-items:center; gap:7px; }
+  .jstep .ic { width:14px; text-align:center; flex:none; font-weight:800; }
+  .jstep.ok .ic { color:var(--ok); } .jstep.failed .ic { color:var(--bad); } .jstep.skipped { color:var(--faint); } .jstep.pending { color:var(--dim); }
+  .jstep.running .ic::before { content:""; display:inline-block; width:10px; height:10px; border:2px solid var(--acc); border-top-color:transparent; border-radius:50%; animation:spin .9s linear infinite; vertical-align:-1px; }
+  pre.tail { margin:2px 0 0; font:11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:var(--dim); white-space:pre-wrap; overflow-wrap:anywhere; max-height:66px; overflow:hidden; }
+  .link { background:none; border:0; padding:0; color:var(--acc); font-weight:600; font-size:12px; }
+  .link:hover { background:none; text-decoration:underline; }
+  .empty { color:var(--dim); text-align:center; padding:60px 10px; }
+
+  /* ===== settings (same layout as LiveMic and LivePi's Setup) ===== */
+  .setup { display:flex; gap:14px; align-items:flex-start; }
+  .side { display:flex; flex-direction:column; gap:4px; width:168px; flex:0 0 168px; position:sticky; top:64px; }
+  .side button { display:flex; align-items:center; gap:9px; text-align:left; background:transparent; color:var(--dim); font-weight:600; border-color:transparent; }
+  .side button svg { width:16px; height:16px; flex:0 0 16px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  .side button:hover { color:var(--fg); }
+  .side button.on { background:var(--card); border-color:var(--line); color:var(--acc); box-shadow:inset 3px 0 0 var(--acc); }
+  .pane { flex:1; min-width:0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:14px; margin-bottom:14px; max-width:820px; }
+  .set { display:flex; align-items:center; gap:12px; padding:11px 0; border-top:1px solid var(--line); }
+  .card > h2 + .set, .set.first { border-top:0; }
+  .sl { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .sl b { font-weight:600; font-size:14px; }
+  .sl span { font-size:12px; color:var(--dim); line-height:1.35; }
+  .sl span:empty { display:none; }
+  .sc { flex:0 1 auto; display:flex; gap:6px; align-items:center; justify-content:flex-end; flex-wrap:wrap; min-width:0; }
+  .sc input.txt { width:120px; max-width:100%; }
+  .sc input.num { width:72px; text-align:center; }
+  .sc input.wide { width:190px; max-width:100%; }
+  .sc select { max-width:170px; }
+  .sc .to { font-size:12px; color:var(--dim); }
+  .sc .val { font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums; text-align:right; }
+  .sc .val.ok { color:var(--ok); } .sc .val.warn { color:var(--warn); } .sc .val.bad { color:var(--bad); }
+  .pnote { max-width:820px; margin:0 0 12px; }
+  details > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px; min-height:28px; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::after { content:"›"; margin-left:auto; color:var(--dim); font-size:20px; line-height:1; transition:transform .15s; }
+  details[open] > summary::after { transform:rotate(90deg); }
+  details > summary b { font-weight:700; letter-spacing:.06em; text-transform:uppercase; font-size:13px; }
+  details > summary .note { margin-left:2px; }
+  details.fold > summary b, details.dcard > summary b { flex:0 1 auto; }
+  details.dcard[open] > summary, details.fold[open] > summary { margin-bottom:8px; }
+  details.sub { border-top:1px solid var(--line); margin-top:6px; padding-top:10px; }
+  details.sub > summary { color:var(--dim); font-size:13px; font-weight:600; }
+  details.fold > .card { border:0; padding:0; margin:0 0 6px; max-width:none; background:transparent; }
+  .locknote { border:1px solid var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent); border-radius:6px; padding:8px 10px; margin-bottom:12px; font-size:13px; max-width:820px; }
+  .formerr { color:var(--bad); font-size:12.5px; padding:4px 0 2px; }
+  .keybox { width:100%; font:11.5px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize:none; height:64px; }
+  .found { display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--line); }
+  .found .fi { flex:1; min-width:0; } .found .fi b { display:block; font-weight:600; } .found .fi span { font-size:12px; color:var(--dim); }
+  .dcard h3 { margin:0 0 4px; font-size:14px; }
+  .act { display:flex; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--line); cursor:pointer; }
+  .act:first-child { border-top:0; }
+  .act:hover { background:color-mix(in srgb, var(--card2) 60%, transparent); }
+  .act .ai { flex:1; min-width:0; } .act .ai b { display:block; font-weight:600; } .act .ai span { font-size:12px; color:var(--dim); display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bk { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line); font-size:13px; }
+  .bk span { flex:1; min-width:0; overflow-wrap:anywhere; } .bk small { color:var(--dim); }
+
+  /* confirm and log windows */
+  .scrim { position:fixed; inset:0; background:#0009; z-index:40; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .modal { background:var(--card); border:1px solid var(--line); border-radius:12px; width:min(560px, 100%); max-height:calc(100vh - 32px); display:flex; flex-direction:column; box-shadow:0 12px 40px var(--shadow); }
+  .modal.big { width:min(860px, 100%); }
+  .mh { padding:14px 16px 4px; font-weight:700; font-size:15px; }
+  .mb { padding:6px 16px 12px; overflow:auto; font-size:13.5px; }
+  .mf { padding:10px 16px 14px; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+  .mf .sp { flex:1; }
+  .pstep { display:flex; gap:10px; align-items:flex-start; padding:9px 0; border-top:1px solid var(--line); }
+  .pstep:first-child { border-top:0; }
+  .pstep input { margin-top:3px; padding:0; width:16px; height:16px; accent-color:var(--acc); }
+  .pstep b { display:block; font-weight:600; } .pstep span { font-size:12.5px; color:var(--dim); }
+  .pdev { font-weight:700; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); padding:12px 0 2px; }
+  pre.log { margin:0; font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; overflow-wrap:anywhere; background:var(--inset); border-radius:8px; padding:10px; max-height:60vh; overflow:auto; }
+
+  .toast { position:fixed; left:50%; bottom:calc(14px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:var(--card); color:var(--fg); border:1px solid var(--bad);
+           padding:8px 14px; border-radius:999px; font-size:14px; display:none; z-index:80; max-width:90vw; box-shadow:0 6px 24px var(--shadow); }
+  .toast.show { display:block; } .toast.good { border-color:var(--ok); }
+
+  .offbar { display:none; position:fixed; left:50%; top:calc(12px + env(safe-area-inset-top)); transform:translateX(-50%); z-index:60; background:var(--bad); color:#fff;
+            padding:10px 16px; border-radius:999px; font-weight:600; font-size:14px; box-shadow:0 6px 24px var(--shadow); align-items:center; gap:10px; white-space:nowrap; }
+  body.offline .offbar { display:flex; }
+  body.offline #tab-main, body.offline #tab-setup { filter:grayscale(1); opacity:.4; pointer-events:none; user-select:none; }
+  .spin { width:14px; height:14px; border:2px solid #fff6; border-top-color:#fff; border-radius:50%; animation:spin .9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  @media (max-width:720px) {
+    header { row-gap:6px; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top)); gap:8px; }
+    header h1 { font-size:14px; } header h1 small { display:none; }
+    #status { order:3; flex:1 0 100%; }
+    .gear { order:2; } #fsBtn { margin-left:auto; order:1; } #chkAll { order:1; } #updAll { order:1; }
+    h1 { order:0; }
+    #app { padding-left:10px; padding-right:10px; }
+    .devs { grid-template-columns:1fr; }
+    .setup { flex-direction:column; align-items:stretch; gap:10px; }
+    .side { flex-direction:row; width:100%; flex:none; overflow-x:auto; position:static; scrollbar-width:none; gap:6px; }
+    .side::-webkit-scrollbar { display:none; }
+    .side button { flex:0 0 auto; min-height:38px; padding:6px 14px; border-radius:999px; background:var(--card2); font-size:14px; border:0; box-shadow:none; }
+    .side button.on { background:var(--acc); color:var(--onacc); box-shadow:none; }
+    .card { padding:12px; }
+    .set { padding:10px 0; gap:10px; flex-wrap:wrap; }
+    .sl { flex:1 1 100%; }
+    .sc { flex:1 1 100%; justify-content:flex-start; }
+    .sc input.txt { width:110px; font-size:16px; } .sc input.num { font-size:16px; } .sc input.wide { width:100%; font-size:16px; }
+    .sc button { min-height:38px; padding:6px 12px; font-size:15px; }
+    .sc .seg button { min-height:34px; padding:4px 10px; font-size:14px; }
+    .row button, .df button { min-height:34px; }
+    .set.feat { flex-wrap:nowrap; } .set.feat .sl { flex:1 1 0; } .set.feat .sc { flex:0 0 auto; }
+    body.in-setup #status { display:none; }
+  }
+
+  /* ===== HomeClaude additions ===== */
+  :root { --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #tab-main .devs { grid-template-columns:repeat(2, minmax(0, 1fr)); max-width:1240px; }
+  @media (max-width:720px) { #tab-main .devs { grid-template-columns:1fr; } }
+  .dev.wide { grid-column:1/-1; }
+  .chip.w { background:color-mix(in srgb, var(--warn) 16%, transparent); color:var(--warn); }
+  .chip.b { background:color-mix(in srgb, var(--bad) 16%, transparent); color:var(--bad); }
+  .chip.o { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
+  .alist { display:flex; flex-direction:column; border-top:1px solid var(--line); }
+  .arow { display:grid; grid-template-columns:8px 1fr auto; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); min-width:0; }
+  .arow:last-child { border-bottom:0; }
+  .an { min-width:0; }
+  .an b { font:600 12.5px/1.3 var(--mono); }
+  .an span { display:block; font:11.5px/1.35 var(--mono); color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .an .aerr { color:var(--bad); white-space:normal; overflow-wrap:anywhere; font-family:inherit; }
+  .aw { font-size:11px; color:var(--dim); text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .aw .chip { margin-left:4px; vertical-align:1px; }
+  .cmd { display:block; width:100%; margin:0; font:12px/1.45 var(--mono); background:var(--inset); color:var(--fg); border-radius:8px; padding:9px 10px; white-space:pre-wrap; overflow-wrap:anywhere; user-select:all; }
+  .cmd.dim { color:var(--dim); user-select:none; }
+  .copyrow { display:flex; gap:8px; align-items:flex-start; margin-top:6px; }
+  .copyrow .cmd { flex:1; min-width:0; }
+  .tl { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line); font-size:13px; }
+  .tl b { font:600 12.5px var(--mono); min-width:0; overflow-wrap:anywhere; }
+  .tl span:not(.chip) { flex:1; color:var(--dim); font-size:12px; min-width:0; }
+  .tl .chip { flex:none; }
+  .tl.off { opacity:.45; }
+  ol.steps { margin:6px 0 2px; padding-left:20px; color:var(--dim); font-size:13px; }
+  ol.steps li { margin:4px 0; } ol.steps b { color:var(--fg); font-weight:600; }
+  .sub2 { font-weight:700; font-size:13px; margin:14px 0 2px; }
+  .sub2:first-of-type { margin-top:4px; }
+  .rv code, .note code, ol.steps code { font:12px var(--mono); background:var(--card2); padding:1px 5px; border-radius:5px; color:var(--fg); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HomeClaude <span class="ver" id="hVer"></span><small>Claude bridge for Home Assistant</small></h1>
+  <div id="status"></div>
+  <button id="chkAll" class="gear" title="Check Home Assistant now" aria-label="Check Home Assistant now"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></button>
+  <button id="fsBtn" class="gear" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  <button id="gear" class="gear" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Done</span></button>
+</header>
+<div class="offbar"><span class="spin"></span>Lost connection to HomeClaude. Retrying…</div>
+
+<div id="app">
+<section id="tab-main">
+  <div id="alerts"></div>
+  <div class="devs">
+    <div class="dev none" id="haCard">
+      <div class="dh"><span class="dot" id="haDot"></span><div class="dn">Home Assistant</div></div>
+      <div class="dsub" id="haSub"></div>
+      <div class="rows" id="haRows"></div>
+      <div class="df"><span class="when" id="haWhen"></span><button id="haOpen" class="hide">Open</button><button id="haTest">Test now</button></div>
+    </div>
+    <div class="dev none" id="accCard">
+      <div class="dh"><span class="dot" id="accDot"></span><div class="dn">Claude access</div><div class="seg" id="accSeg"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
+      <div class="dsub" id="accSub"></div>
+      <div class="rows" id="accRows"></div>
+      <div class="df"><span class="when" id="accWhen"></span><button id="permBtn">Permissions</button><button id="connBtn" class="on">Connect Claude</button></div>
+    </div>
+    <div class="dev wide none" id="actCard">
+      <div class="dh"><span class="dot acc"></span><div class="dn">Recent activity</div><button class="link" id="actAll">All activity</button></div>
+      <div class="alist" id="actList"></div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-setup" class="hide">
+ <div class="setup">
+  <div class="side" id="sub">
+    <button data-sub="ha" class="on"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6"/></svg><span>Home Assistant</span></button>
+    <button data-sub="claude"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Connect Claude</span></button>
+    <button data-sub="perm"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span>Permissions</span></button>
+    <button data-sub="backups"><svg viewBox="0 0 24 24"><path d="M21 8v12H3V8M1 3h22v5H1zM10 12h4"/></svg><span>Backups</span></button>
+    <button data-sub="activity"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></button>
+    <button data-sub="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg><span>Settings</span></button>
+  </div>
+  <div class="pane">
+
+    <div data-pane="ha">
+      <div class="note pnote">HomeClaude logs in to Home Assistant through its own APIs with a long-lived access token. Nothing is installed in Home Assistant.</div>
+      <div class="card">
+        <h2>Home Assistant</h2>
+        <div class="set first"><div class="sl"><b>Address</b><span>Use the IP address and port, for example http://192.168.1.10:8123. Names ending in .local usually do not work from inside a container</span></div><div class="sc"><input id="haUrl" class="txt wide" placeholder="http://192.168.1.10:8123" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Home Assistant address"></div></div>
+        <div class="set"><div class="sl"><b>Access token</b><span id="haTokNote">A long-lived access token from an administrator user</span></div><div class="sc"><input id="haTok" class="txt wide" type="password" autocomplete="new-password" spellcheck="false" aria-label="Access token"></div></div>
+        <div id="haErr" class="formerr hide"></div>
+        <div class="set"><div class="sl"><b>Status</b><span id="haStat"></span></div><div class="sc"><button id="haTest2">Test</button><button id="haSave" class="on">Save</button></div></div>
+      </div>
+      <div class="card">
+        <h2>Making the token</h2>
+        <ol class="steps">
+          <li>In Home Assistant, go to <b>Settings &gt; People &gt; Users</b> and add a user just for Claude, for example <b>Claude</b>. Turn on <b>Administrator</b>: logs, traces, integrations and automation configs are only open to administrators.</li>
+          <li>Log in to Home Assistant once as that user, open its <b>profile</b> (bottom left), the <b>Security</b> tab, and under <b>Long-lived access tokens</b> choose <b>Create token</b>.</li>
+          <li>Copy the token (Home Assistant shows it only once), paste it above and press <b>Save</b>.</li>
+        </ol>
+        <div class="note" style="margin-top:8px">A separate user means everything Claude does shows up in Home Assistant's logbook under that name, and you can revoke it there at any time.</div>
+      </div>
+    </div>
+
+    <div data-pane="claude" class="hide">
+      <div class="note pnote">Claude reaches HomeClaude at <code>/mcp</code> with an access token. Anyone with the token can use what Permissions allows, so treat it like a password.</div>
+      <div class="card">
+        <h2>Access token</h2>
+        <div class="set first"><div class="sl"><b>Token</b><span id="tokNote">Hidden. Show it to copy the connection details below</span></div><div class="sc"><button id="tokShow">Show</button><button id="tokNew" class="danger">New token</button></div></div>
+      </div>
+      <div class="card">
+        <h2>Claude Code on a computer</h2>
+        <div class="note">On a Mac or PC on this network, run this once in Terminal. Claude Code then has the Home Assistant tools in every project.</div>
+        <div class="copyrow"><pre class="cmd dim" id="cmdCode">Show the token first</pre><button data-copy="cmdCode">Copy</button></div>
+        <div class="note" style="margin-top:8px">Check it with <code>claude mcp list</code>. To remove it: <code>claude mcp remove homeclaude</code>.</div>
+      </div>
+      <div class="card">
+        <h2>claude.ai, Claude Desktop and the phone app</h2>
+        <div class="note">These connect from Anthropic's servers, not from your device, so they need an <b>https</b> address that reaches this container from the internet, for example a Cloudflare Tunnel or your reverse proxy pointing at port <span id="portVal"></span>. Without one, use Claude Code above.</div>
+        <div class="set"><div class="sl"><b>Public address</b><span>The https address that forwards to HomeClaude</span></div><div class="sc"><input id="pubUrl" class="txt wide" placeholder="https://homeclaude.example.com" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Public address"><button id="pubSave" class="on">Save</button></div></div>
+        <div class="sub2">Remote MCP server URL</div>
+        <div class="copyrow"><pre class="cmd dim" id="cmdUrl">Save a public address first</pre><button data-copy="cmdUrl">Copy</button></div>
+        <div class="sub2">Request header</div>
+        <div class="copyrow"><pre class="cmd dim" id="cmdHdr">Show the token first</pre><button data-copy="cmdHdr">Copy</button></div>
+        <ol class="steps">
+          <li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>.</li>
+          <li>Name it <b>HomeClaude</b> and paste the URL. Under Authentication choose <b>No sign in</b>.</li>
+          <li>Under <b>Request headers</b> add the header above (name <code>Authorization</code>, value <code>Bearer …</code>), then <b>Add</b>. Claude Desktop and the phone app use the same connector.</li>
+        </ol>
+        <div class="note" style="margin-top:6px">If a Claude app has no place for headers, the URL <code>/mcp/&lt;token&gt;</code> also works (the token is then part of the address).</div>
+      </div>
+    </div>
+
+    <div data-pane="perm" class="hide">
+      <div class="note pnote">Claude can always read: states, history, logs, traces, integrations, repairs and configs. What it may change is up to you. These rules are checked in HomeClaude, so they hold whatever Claude asks for.</div>
+      <div class="card">
+        <h2>Claude access</h2>
+        <div class="set first"><div class="sl"><b>Allow Claude to connect</b><span>Off refuses every request, without changing the token</span></div><div class="sc"><div class="seg" id="pEnabled"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+      </div>
+      <div class="card">
+        <h2>What Claude may change</h2>
+        <div class="set first feat"><div class="sl"><b>Edit automations and scripts</b><span>Create and change them, and reload YAML. The old version is backed up first</span></div><div class="sc"><div class="seg" data-perm="edit"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set feat"><div class="sl"><b>Call services</b><span>Turn things on and off, run scripts, send notifications. This acts on the real home</span></div><div class="sc"><div class="seg" data-perm="services"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set feat"><div class="sl"><b>Delete automations and scripts</b><span>Backed up first, so they can be restored from Backups</span></div><div class="sc"><div class="seg" data-perm="delete"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set feat"><div class="sl"><b>Restart Home Assistant</b><span>Only after its configuration check passes</span></div><div class="sc"><div class="seg" data-perm="restart"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+      </div>
+      <div class="card">
+        <h2>Blocked</h2>
+        <div class="set first"><div class="sl"><b>Blocked domains</b><span>Claude can read these, but cannot call their services, aim services at their entities, or save automations and scripts whose actions do. Default: lock, alarm_control_panel, cover (garage doors)</span></div><div class="sc"><input id="pBlocked" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Blocked domains"><button id="pBlockedSave" class="on">Save</button></div></div>
+      </div>
+      <div class="card">
+        <h2>Tools Claude sees</h2>
+        <div id="toolList"></div>
+      </div>
+    </div>
+
+    <div data-pane="backups" class="hide">
+      <div class="note pnote">Before Claude changes or deletes an automation or script, HomeClaude saves the old version here. Restore puts it back in Home Assistant (and saves the current one first).</div>
+      <div class="card"><h2>Backups</h2><div id="bkList"><div class="note">Loading…</div></div></div>
+    </div>
+
+    <div data-pane="activity" class="hide">
+      <div class="card"><h2>Everything Claude asked for</h2><div class="note" id="actNote" style="margin-bottom:6px"></div><div class="alist" id="actFull"></div>
+        <div class="set"><div class="sl"></div><div class="sc"><button id="actClear" class="danger">Clear</button></div></div>
+      </div>
+    </div>
+
+    <div data-pane="settings" class="hide">
+      <div class="note pnote">Display settings are saved on this device. The rest is saved on the server.</div>
+      <div class="card">
+        <h2>Appearance</h2>
+        <div class="set first"><div class="sl"><b>Theme</b><span>Auto follows this device</span></div><div class="sc"><div class="seg" id="themeSeg"><button data-v="auto">Auto</button><button data-v="dark">Dark</button><button data-v="light">Light</button></div></div></div>
+      </div>
+      <div class="card">
+        <h2>Backups</h2>
+        <div class="set first"><div class="sl"><b>Keep</b><span>Newest backups per automation or script</span></div><div class="sc"><input id="bkKeep" class="num" type="number" min="1" max="200" aria-label="Backups to keep"></div></div>
+      </div>
+      <div class="card">
+        <h2>Control</h2>
+        <div class="set first"><div class="sl"><b>Control PIN</b><span id="pinNote"></span></div><div class="sc"><input id="pinNew" class="txt" type="password" autocomplete="new-password" placeholder="New PIN" aria-label="New PIN"><button id="pinSet" class="on">Set</button><button id="pinRm" class="danger hide">Remove</button></div></div>
+      </div>
+      <div class="card">
+        <h2>About</h2>
+        <div class="set first"><div class="sl"><b>Version</b></div><div class="sc"><span class="val" id="verVal"></span></div></div>
+        <div class="set" id="updRow"><div class="sl"><b>Updates</b><span id="updNote"></span></div><div class="sc"><button id="updBtn">Check now</button></div></div>
+        <div class="set hide" id="updHow"><div class="sl"><b>To update</b><span>TrueNAS pulls the newest image when the app is restarted (pull policy always). Or set the image to this</span></div><div class="sc"><input id="updImg" class="txt wide" readonly spellcheck="false" aria-label="New image name"></div></div>
+        <div class="set"><div class="sl"><b>Mode</b><span id="modeNote"></span></div><div class="sc"><span class="val" id="modeVal"></span></div></div>
+      </div>
+    </div>
+
+  </div>
+ </div>
+</section>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<div id="modalHost"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
+  function ago(t) {
+    if (!t) return 'never';
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+  function when(t) { var d = new Date(t); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
+
+  // ---------- saved on this device ----------
+  var SUBS = ['ha', 'claude', 'perm', 'backups', 'activity', 'settings'];
+  var themePref = 'auto', subPane = 'ha';
+  try { themePref = localStorage.getItem('hc-theme') || 'auto'; } catch (e) {}
+  try { subPane = localStorage.getItem('hc-sub') || 'ha'; } catch (e) {}
+  if (['auto', 'dark', 'light'].indexOf(themePref) < 0) themePref = 'auto';
+  if (SUBS.indexOf(subPane) < 0) subPane = 'ha';
+
+  // ---------- state ----------
+  var snap = null, lastMsg = 0, pin = '', inSetup = false, token = '';
+  try { pin = sessionStorage.getItem('hc-pin') || ''; } catch (e) {}
+  var haLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null;
+
+  var toastEl = $('#toast'), toastTimer;
+  function toast(msg, good) {
+    toastEl.textContent = msg; toastEl.className = 'toast show' + (good ? ' good' : '');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.className = 'toast'; }, 4500);
+  }
+
+  // ---------- talking to the server ----------
+  // Every change goes through api(): it asks for the PIN when one is set, and asks again if it was wrong.
+  function api(path, body, retried) {
+    if (snap && snap.pinRequired && !pin) {
+      var p = prompt('Control PIN');
+      if (p == null) return Promise.resolve({ ok: false, cancelled: true });
+      pin = p; try { sessionStorage.setItem('hc-pin', pin); } catch (e) {}
+    }
+    return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-pin': pin }, body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
+      .then(function (res) {
+        if (res.status === 401) {
+          pin = ''; try { sessionStorage.removeItem('hc-pin'); } catch (e) {}
+          if (!retried) return api(path, body, true);
+        }
+        return res.j;
+      })
+      .catch(function () { return { ok: false, error: 'Could not reach HomeClaude' }; });
+  }
+  function report(j, fallback) { if (!j.ok && !j.cancelled) toast(j.error || fallback); return j; }
+
+  // ---------- theme ----------
+  var mq = window.matchMedia ? matchMedia('(prefers-color-scheme: light)') : null;
+  function applyTheme() {
+    var light = themePref === 'light' || (themePref === 'auto' && mq && mq.matches);
+    document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+  }
+  if (mq && mq.addEventListener) mq.addEventListener('change', function () { if (themePref === 'auto') applyTheme(); });
+
+  function paintSeg(el, v) { $$('button', el).forEach(function (b) { b.classList.toggle('on', b.dataset.v === v); }); }
+
+  // ---------- windows ----------
+  var host = $('#modalHost');
+  function closeModal() { host.innerHTML = ''; document.removeEventListener('keydown', escKey); }
+  function escKey(e) { if (e.key === 'Escape') closeModal(); }
+  function openModal(html, big) {
+    host.innerHTML = '<div class="scrim"><div class="modal' + (big ? ' big' : '') + '" role="dialog" aria-modal="true">' + html + '</div></div>';
+    $('.scrim', host).addEventListener('mousedown', function (e) { if (e.target.classList.contains('scrim')) closeModal(); });
+    document.addEventListener('keydown', escKey);
+    return $('.modal', host);
+  }
+  function confirmBox(title, text, goLabel, danger) {
+    return new Promise(function (resolve) {
+      var m = openModal('<div class="mh">' + esc(title) + '</div><div class="mb">' + text + '</div><div class="mf"><button id="mNo">Cancel</button><button id="mYes" class="on' + (danger ? ' danger' : '') + '">' + esc(goLabel) + '</button></div>');
+      $('#mNo', m).onclick = function () { closeModal(); resolve(false); };
+      $('#mYes', m).onclick = function () { closeModal(); resolve(true); };
+    });
+  }
+
+  // ---------- connection details ----------
+  function mcpBase() { return location.protocol + '//' + location.host; }
+  function codeCmd(t) { return 'claude mcp add --transport http homeclaude ' + mcpBase() + '/mcp --header "Authorization: Bearer ' + t + '"'; }
+  function connUrl() { return snap && snap.publicUrl ? snap.publicUrl + '/mcp' : ''; }
+  function hdr(t) { return 'Authorization: Bearer ' + t; }
+  function fillConnect(root) {
+    var a = $('#cmdCode', root), b = $('#cmdUrl', root), c = $('#cmdHdr', root);
+    if (a) { a.textContent = token ? codeCmd(token) : 'Show the token first'; a.classList.toggle('dim', !token); }
+    if (b) { var u = connUrl(); b.textContent = u || 'Save a public https address first'; b.classList.toggle('dim', !u); }
+    if (c) { c.textContent = token ? hdr(token) : 'Show the token first'; c.classList.toggle('dim', !token); }
+    var n = $('#tokNote');
+    if (n) n.textContent = token ? 'Shown below. It stays on this page until you reload' : 'Hidden. Show it to copy the connection details below';
+  }
+  function getToken() {
+    if (token) return Promise.resolve(token);
+    return api('api/token', {}).then(function (j) { if (j.ok) { token = j.token; fillConnect(document); } else report(j, 'Could not get the token'); return token; });
+  }
+  function copyFrom(id, root) {
+    var el = $('#' + id, root || document);
+    if (!el || el.classList.contains('dim')) { toast('Nothing to copy yet'); return; }
+    var text = el.textContent;
+    var done = function () { toast('Copied', true); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, function () { selectText(el); });
+    else { selectText(el); try { document.execCommand('copy'); done(); } catch (e) { toast('Select the text and copy it'); } }
+  }
+  function selectText(el) { var r = document.createRange(); r.selectNodeContents(el); var s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+  document.addEventListener('click', function (e) { var b = e.target.closest('[data-copy]'); if (b) copyFrom(b.dataset.copy, b.closest('.modal') || document); });
+
+  function openConnect() {
+    getToken().then(function (t) {
+      if (!t) return;
+      var u = connUrl();
+      var m = openModal('<div class="mh">Connect Claude</div><div class="mb">' +
+        '<div class="sub2">Claude Code on a computer on this network</div><div class="note">Run once in Terminal:</div>' +
+        '<div class="copyrow"><pre class="cmd" id="cmdCode">' + esc(codeCmd(t)) + '</pre><button data-copy="cmdCode">Copy</button></div>' +
+        '<div class="sub2">claude.ai, Claude Desktop and the phone app</div>' +
+        (u ? '<div class="note">Customize &gt; Connectors &gt; + Add &gt; Add custom connector. Authentication: No sign in. URL:</div><div class="copyrow"><pre class="cmd" id="cmdUrl">' + esc(u) + '</pre><button data-copy="cmdUrl">Copy</button></div>' +
+             '<div class="note" style="margin-top:6px">Request header:</div><div class="copyrow"><pre class="cmd" id="cmdHdr">' + esc(hdr(t)) + '</pre><button data-copy="cmdHdr">Copy</button></div>'
+           : '<div class="note">These connect from Anthropic\'s servers, so they need a public https address that reaches HomeClaude. Set it under Settings &gt; Connect Claude, or use Claude Code.</div>') +
+        '<div class="sub2">Try it</div><div class="note">Ask Claude: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></div>' +
+        '</div><div class="mf"><button id="mMore">More options</button><span class="sp"></span><button id="mClose" class="on">Done</button></div>', true);
+      $('#mClose', m).onclick = closeModal;
+      $('#mMore', m).onclick = function () { closeModal(); showTab(true); showSub('claude'); };
+    });
+  }
+
+  // ---------- dashboard ----------
+  function row(label, value) { return '<div class="row"><div class="rl">' + esc(label) + '</div><div class="rv">' + value + '</div><div></div></div>'; }
+  function chips(list) { return '<div class="chips">' + list.map(function (c) { return '<span class="chip ' + (c[1] || '') + '">' + esc(c[0]) + '</span>'; }).join('') + '</div>'; }
+  var PERMS = [['edit', 'Edit'], ['services', 'Services'], ['delete', 'Delete'], ['restart', 'Restart']];
+  function modeText(a) {
+    if (!a.enabled) return 'Off';
+    var on = PERMS.filter(function (p) { return a[p[0]]; });
+    return on.length ? 'Read + ' + on.map(function (p) { return p[1].toLowerCase(); }).join(', ') : 'Read only';
+  }
+
+  function actRows(list, max) {
+    if (!list.length) return '<div class="note" style="padding:12px 0">Nothing yet. When Claude uses HomeClaude, every request shows up here.</div>';
+    return list.slice(0, max).map(function (a) {
+      return '<div class="arow"><span class="dot ' + (a.ok ? 'ok' : 'bad') + '"></span><div class="an"><b>' + esc(a.tool) + '</b>' + (a.args ? '<span title="' + esc(a.args) + '">' + esc(a.args) + '</span>' : '') +
+        (a.error ? '<span class="aerr">' + esc(a.error) + '</span>' : '') + '</div><div class="aw">' + esc(ago(a.t)) + (a.ms ? ' · ' + a.ms + ' ms' : '') + (a.write ? '<span class="chip w">change</span>' : '') + '</div></div>';
+    }).join('');
+  }
+
+  function renderHeader(s) {
+    $('#hVer').textContent = 'v' + s.version;
+    var st = s.ha.status || {}, a = s.access, out = [];
+    if (!st.configured) out.push('<span class="st warn"><span class="dot warn"></span>Home Assistant not set up</span>');
+    else if (st.ok) out.push('<span class="st ok"><span class="dot ok"></span>Home Assistant ' + esc(st.version) + '</span>');
+    else out.push('<span class="st bad"><span class="dot bad"></span>Home Assistant unreachable</span>');
+    var mt = modeText(a);
+    out.push('<span class="st ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"><span class="dot ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"></span>Claude: ' + esc(mt) + '</span>');
+    if (s.lastCallAt) out.push('<span class="st"><span class="dot acc"></span>Last request ' + esc(ago(s.lastCallAt)) + '</span>');
+    if (s.update && s.update.available) out.push('<span class="st warn">Update ' + esc(s.update.latest) + ' available</span>');
+    if (s.demo) out.push('<span class="st">Demo</span>');
+    $('#status').innerHTML = out.join('');
+    $('#chkAll').classList.toggle('spin', !!st.checking);
+  }
+
+  function renderMain(s) {
+    var st = s.ha.status || {}, a = s.access;
+    // alerts
+    var al = [];
+    if (!st.configured) al.push('<div class="errbox">Home Assistant is not set up yet. <button id="alSetup" class="on">Set it up</button></div>');
+    else if (!st.ok && st.error) al.push('<div class="errbox">' + esc(st.error) + '</div>');
+    if (!a.enabled) al.push('<div class="errbox">Claude access is off: every request is refused.</div>');
+    $('#alerts').innerHTML = al.join('');
+    var as = $('#alSetup'); if (as) as.onclick = function () { showTab(true); showSub('ha'); };
+
+    // Home Assistant card
+    var hc = $('#haCard');
+    hc.className = 'dev ' + (!st.configured ? 'none' : st.ok ? '' : 'off');
+    $('#haDot').className = 'dot ' + (!st.configured ? '' : st.ok ? 'ok' : 'bad');
+    $('#haSub').textContent = s.ha.url || 'No address yet';
+    var r = '';
+    if (st.configured) {
+      r += row('Status', st.checking ? 'Checking…' : st.ok ? '<span class="good">Connected</span>' + (st.state && st.state !== 'RUNNING' ? ' <small>' + esc(st.state) + '</small>' : '') : '<span class="bad">Not reachable</span><small>' + esc(st.error) + '</small>');
+      if (st.version) r += row('Version', esc(st.version));
+      if (st.name) r += row('Location', esc(st.name));
+      if (st.ok) r += row('Response', esc(st.ms) + ' ms');
+    } else r += row('Status', '<span class="up">Not set up</span><small>Add the address and an access token in Settings</small>');
+    $('#haRows').innerHTML = r;
+    $('#haWhen').textContent = st.checkedAt ? 'Checked ' + ago(st.checkedAt) : '';
+    $('#haOpen').classList.toggle('hide', !s.ha.url || s.demo);
+
+    // Claude access card
+    var mt = modeText(a);
+    $('#accCard').className = 'dev ' + (!a.enabled ? 'off' : mt === 'Read only' ? '' : 'upd');
+    $('#accDot').className = 'dot ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn');
+    paintSeg($('#accSeg'), a.enabled ? '1' : '0');
+    $('#accSub').textContent = a.enabled ? (mt === 'Read only' ? 'Claude can look, not touch' : 'Claude can make changes') : 'Every request is refused';
+    var on = (s.tools || []).filter(function (t) { return t.on; }).length;
+    var rr = row('Mode', esc(mt));
+    rr += row('Changes', chips(PERMS.map(function (p) { return [p[1], a[p[0]] ? 'w' : '']; })));
+    rr += row('Blocked', a.blocked.length ? chips(a.blocked.map(function (d) { return [d, 'b']; })) : '<span class="up">Nothing blocked</span>');
+    rr += row('Tools', on + ' of ' + (s.tools || []).length);
+    $('#accRows').innerHTML = rr;
+    $('#accWhen').textContent = s.lastCallAt ? 'Last request ' + ago(s.lastCallAt) : 'No requests yet';
+
+    // activity
+    $('#actList').innerHTML = actRows(s.activity || [], 12);
+  }
+
+  function updateSettings(s) {
+    var st = s.ha.status || {}, a = s.access;
+    // Home Assistant pane
+    if (!haLoaded) { $('#haUrl').value = s.ha.url || ''; haLoaded = true; }
+    $('#haTok').placeholder = s.ha.hasToken ? 'Saved (type to replace)' : 'Paste the token';
+    $('#haStat').innerHTML = !st.configured ? 'Not set up yet' : st.checking ? 'Checking…' : st.ok ? '<span style="color:var(--ok)">Connected to Home Assistant ' + esc(st.version) + (st.name ? ' (' + esc(st.name) + ')' : '') + '</span>' : '<span style="color:var(--bad)">' + esc(st.error || 'Not reachable') + '</span>';
+    $('#haUrl').disabled = $('#haTok').disabled = $('#haSave').disabled = !!s.demo;
+    // Claude pane
+    if (!pubLoaded) { $('#pubUrl').value = s.publicUrl || ''; pubLoaded = true; }
+    $('#portVal').textContent = location.port || (location.protocol === 'https:' ? '443' : '80');
+    fillConnect(document);
+    // permissions
+    paintSeg($('#pEnabled'), a.enabled ? '1' : '0');
+    $$('[data-perm]').forEach(function (el) { paintSeg(el, a[el.dataset.perm] ? '1' : '0'); });
+    if (!blkLoaded) { $('#pBlocked').value = a.blocked.join(', '); blkLoaded = true; }
+    $('#toolList').innerHTML = (s.tools || []).map(function (t) {
+      return '<div class="tl' + (t.on ? '' : ' off') + '"><b>' + esc(t.name) + '</b><span>' + esc(t.title) + '</span>' + (t.needs ? '<span class="chip ' + (t.on ? 'w' : '') + '">' + (t.on ? 'change' : 'off') + '</span>' : '<span class="chip o">read</span>') + '</div>';
+    }).join('');
+    // activity
+    $('#actNote').textContent = s.activityTotal ? 'Newest first. Showing ' + Math.min(60, s.activityTotal) + ' of ' + s.activityTotal + ' kept (the last 300).' : '';
+    $('#actFull').innerHTML = actRows(s.activity || [], 60);
+    // backups
+    if (subPane === 'backups' && bkSig !== s.backupCount) { bkSig = s.backupCount; loadBackups(); }
+    // settings
+    if (!keepLoaded) { $('#bkKeep').value = s.backup.keep; keepLoaded = true; }
+    $('#pinNote').textContent = s.pinRequired ? 'Set. Changes and showing the token need it' : 'Not set. Anyone on this network can change settings and see the token';
+    $('#pinRm').classList.toggle('hide', !s.pinRequired);
+    $('#verVal').textContent = s.version;
+    var u = s.update || {};
+    $('#updRow').classList.toggle('hide', !u.enabled);
+    $('#updNote').textContent = u.available ? 'Version ' + u.latest + ' is available' : u.failed ? 'Could not check' : u.checkedAt ? 'Up to date (checked ' + ago(u.checkedAt) + ')' : 'Not checked yet';
+    $('#updHow').classList.toggle('hide', !u.available);
+    $('#updImg').value = u.image || '';
+    $('#modeVal').textContent = s.demo ? 'Demo' : 'Live';
+    $('#modeNote').textContent = s.demo ? 'Simulated Home Assistant, access token "demo". Nothing is saved' : 'Connected to your Home Assistant';
+  }
+
+  function render(s) {
+    snap = s; lastMsg = Date.now();
+    document.body.classList.remove('offline');
+    renderHeader(s);
+    if (inSetup) updateSettings(s); else renderMain(s);
+  }
+
+  // ---------- backups ----------
+  function loadBackups() {
+    fetch('api/backups', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+      var list = j.backups || [];
+      if (!list.length) { $('#bkList').innerHTML = '<div class="note">' + (snap && snap.demo ? 'Demo mode keeps no backups.' : 'No backups yet. They appear when Claude changes or deletes an automation or script.') + '</div>'; return; }
+      $('#bkList').innerHTML = list.map(function (b, i) {
+        return '<div class="bk"><span><b>' + esc(b.alias || b.id) + '</b> <small>' + esc(b.kind) + ' ' + esc(b.id) + '</small><br><small>' + esc(when(b.savedAt)) + ' · ' + esc(String(b.reason).replace(/-/g, ' ')) + '</small></span>' +
+          '<button data-dl="' + i + '">Download</button><button data-rs="' + i + '">Restore</button></div>';
+      }).join('');
+      $$('[data-dl]', $('#bkList')).forEach(function (btn) { btn.onclick = function () { var b = list[btn.dataset.dl]; location.href = 'api/backup?kind=' + encodeURIComponent(b.kind) + '&id=' + encodeURIComponent(b.id) + '&file=' + encodeURIComponent(b.file) + '&pin=' + encodeURIComponent(pin); }; });
+      $$('[data-rs]', $('#bkList')).forEach(function (btn) {
+        btn.onclick = function () {
+          var b = list[btn.dataset.rs];
+          confirmBox('Restore ' + (b.alias || b.id) + '?', '<p>Puts the ' + esc(b.kind) + ' back the way it was on ' + esc(when(b.savedAt)) + '. The current version is backed up first. Home Assistant reloads it right away.</p>', 'Restore').then(function (yes) {
+            if (!yes) return;
+            api('api/restore', { kind: b.kind, id: b.id, file: b.file }).then(function (j) { report(j, 'Could not restore'); if (j.ok) { toast('Restored', true); loadBackups(); } });
+          });
+        };
+      });
+    }).catch(function () { $('#bkList').innerHTML = '<div class="note">Could not load the backups.</div>'; });
+  }
+
+  // ---------- buttons ----------
+  function testHa(btn) {
+    btn.disabled = true; var t = btn.textContent; btn.textContent = 'Testing…';
+    api('api/ha-test', {}).then(function (j) { btn.disabled = false; btn.textContent = t; if (j.ok) toast('Home Assistant answered', true); else report(j, 'Could not reach Home Assistant'); });
+  }
+  $('#haTest').onclick = function () { testHa(this); };
+  $('#haTest2').onclick = function () { testHa(this); };
+  $('#chkAll').onclick = function () { api('api/ha-test', {}).then(function (j) { if (!j.ok) report(j, 'Could not reach Home Assistant'); }); };
+  $('#haOpen').onclick = function () { if (snap && snap.ha.url) window.open(snap.ha.url, '_blank', 'noopener'); };
+  $('#haSave').onclick = function () {
+    var body = { url: $('#haUrl').value.trim() }, tok = $('#haTok').value.trim();
+    if (tok) body.token = tok;
+    $('#haErr').classList.add('hide');
+    api('api/ha', body).then(function (j) {
+      if (j.cancelled) return;
+      if (!j.ok) { $('#haErr').textContent = j.error || 'Could not save'; $('#haErr').classList.remove('hide'); return; }
+      $('#haTok').value = ''; toast('Saved. Testing…', true);
+    });
+  };
+  $('#connBtn').onclick = openConnect;
+  $('#permBtn').onclick = function () { showTab(true); showSub('perm'); };
+  $('#actAll').onclick = function () { showTab(true); showSub('activity'); };
+  $$('#accSeg button').forEach(function (b) { b.onclick = function () { setAccess({ enabled: b.dataset.v === '1' }); }; });
+  $$('#pEnabled button').forEach(function (b) { b.onclick = function () { setAccess({ enabled: b.dataset.v === '1' }); }; });
+
+  var PERM_WARN = {
+    services: 'Claude will be able to run services that act on the real home: lights, switches, scripts, notifications. Blocked domains stay blocked.',
+    delete: 'Claude will be able to delete automations and scripts. Each one is backed up first and can be restored from Backups.',
+    restart: 'Claude will be able to restart Home Assistant (after a passing config check). Everything is unavailable for a minute or so.'
+  };
+  $$('[data-perm]').forEach(function (el) {
+    $$('button', el).forEach(function (b) {
+      b.onclick = function () {
+        var on = b.dataset.v === '1', patch = {}; patch[el.dataset.perm] = on;
+        if (on && PERM_WARN[el.dataset.perm]) confirmBox('Allow this?', '<p>' + esc(PERM_WARN[el.dataset.perm]) + '</p>', 'Allow').then(function (y) { if (y) setAccess(patch); });
+        else setAccess(patch);
+      };
+    });
+  });
+  function setAccess(patch) { return api('api/access', patch).then(function (j) { report(j, 'Could not save'); return j; }); }
+  $('#pBlockedSave').onclick = function () {
+    var v = $('#pBlocked').value;
+    var go = function () { setAccess({ blocked: v }).then(function (j) { if (j.ok) { blkLoaded = false; toast('Saved', true); } }); };
+    var now = (snap.access.blocked || []), next = v.split(/[\s,]+/).filter(Boolean);
+    var removed = now.filter(function (d) { return next.indexOf(d) < 0; });
+    if (removed.length) confirmBox('Unblock ' + removed.join(', ') + '?', '<p>If Claude may call services or edit automations, it will be able to act on ' + esc(removed.join(', ')) + ' (for example unlock a door or open the garage).</p>', 'Unblock', true).then(function (y) { if (y) go(); });
+    else go();
+  };
+
+  $('#tokShow').onclick = function () { getToken(); };
+  $('#tokNew').onclick = function () {
+    confirmBox('Make a new token?', '<p>The old token stops working right away. Claude Code and any connectors need the new connection details.</p>', 'New token', true).then(function (y) {
+      if (!y) return;
+      api('api/token', { regenerate: true }).then(function (j) { report(j, 'Could not make a new token'); if (j.ok) { token = j.token; fillConnect(document); toast('New token made', true); } });
+    });
+  };
+  $('#pubSave').onclick = function () {
+    api('api/settings', { publicUrl: $('#pubUrl').value.trim() }).then(function (j) { report(j, 'Could not save'); if (j.ok) { pubLoaded = false; toast('Saved', true); } });
+  };
+  $('#actClear').onclick = function () {
+    confirmBox('Clear the activity list?', '<p>The list of what Claude asked for is emptied. Home Assistant\'s own logbook is not touched.</p>', 'Clear', true).then(function (y) { if (y) api('api/activity-clear', {}).then(function (j) { report(j, 'Could not clear'); }); });
+  };
+
+  $$('#themeSeg button').forEach(function (b) { b.onclick = function () { themePref = b.dataset.v; try { localStorage.setItem('hc-theme', themePref); } catch (e) {} applyTheme(); paintSeg($('#themeSeg'), themePref); }; });
+  $('#bkKeep').addEventListener('change', function () { api('api/settings', { backupKeep: parseInt(this.value, 10) }).then(function (j) { report(j, 'Could not save'); }); });
+  $('#pinSet').onclick = function () {
+    var v = $('#pinNew').value;
+    if (v.length < 4) { toast('A PIN needs at least 4 characters'); return; }
+    api('api/settings', { newPin: v }).then(function (j) {
+      report(j, 'Could not set the PIN');
+      if (j.ok) { pin = v; try { sessionStorage.setItem('hc-pin', v); } catch (e) {} $('#pinNew').value = ''; toast('PIN set', true); }
+    });
+  };
+  $('#pinNew').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('#pinSet').click(); });
+  $('#pinRm').onclick = function () {
+    if (!confirm('Remove the control PIN? Anyone on this network will be able to change permissions and see the token.')) return;
+    api('api/settings', { newPin: null }).then(function (j) { report(j, 'Could not remove the PIN'); if (j.ok) { pin = ''; try { sessionStorage.removeItem('hc-pin'); } catch (e) {} } });
+  };
+  $('#updImg').addEventListener('focus', function () { this.select(); });
+  $('#updBtn').onclick = function () {
+    var b = this; b.disabled = true; b.textContent = 'Checking…';
+    api('api/update-check', {}).then(function (j) { b.disabled = false; b.textContent = 'Check now'; if (!j.ok && !j.cancelled) toast(j.error || 'Could not check'); });
+  };
+
+  // ---------- tabs ----------
+  var gear = $('#gear');
+  function showSub(name) {
+    subPane = name; try { localStorage.setItem('hc-sub', name); } catch (e) {}
+    $$('#sub button').forEach(function (b) { b.classList.toggle('on', b.dataset.sub === name); });
+    $$('[data-pane]').forEach(function (p) { p.classList.toggle('hide', p.dataset.pane !== name); });
+    if (name === 'ha') haLoaded = false;
+    if (name === 'claude') pubLoaded = false;
+    if (name === 'perm') blkLoaded = false;
+    if (name === 'backups') { bkSig = null; }
+    if (name === 'settings') { keepLoaded = false; paintSeg($('#themeSeg'), themePref); }
+    if (snap) updateSettings(snap);
+  }
+  $$('#sub button').forEach(function (b) { b.onclick = function () { showSub(b.dataset.sub); }; });
+  function showTab(setup) {
+    inSetup = setup;
+    $('#tab-main').classList.toggle('hide', setup); $('#tab-setup').classList.toggle('hide', !setup);
+    gear.classList.toggle('on', setup); gear.title = setup ? 'Back to the dashboard' : 'Settings';
+    document.body.classList.toggle('in-setup', setup);
+    if (setup) showSub(subPane); else if (snap) render(snap);
+    window.scrollTo(0, 0);
+  }
+  gear.onclick = function () { showTab(!inSetup); };
+
+  // full screen (hidden where the browser can't, or when installed as an app)
+  (function () {
+    var root = document.documentElement, d = document, btn = $('#fsBtn');
+    var can = !!(root.requestFullscreen || root.webkitRequestFullscreen);
+    var standalone = matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches || navigator.standalone;
+    if (!can || standalone) { btn.classList.add('hide'); return; }
+    btn.onclick = function () {
+      if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+      else { var r = (root.requestFullscreen || root.webkitRequestFullscreen).call(root); if (r && r.catch) r.catch(function () {}); }
+    };
+  })();
+
+  // ---------- live data ----------
+  function start(first) {
+    render(first);
+    if (!first.ha.status.configured && !first.demo) { showTab(true); showSub('ha'); }
+    var es = new EventSource('events');
+    es.onmessage = function (e) { render(JSON.parse(e.data)); };
+    setInterval(function () { if (Date.now() - lastMsg > 5000) document.body.classList.add('offline'); }, 1000);
+  }
+  applyTheme(); paintSeg($('#themeSeg'), themePref);
+  fetch('api/state', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('no server'); return r.json(); })
+    .then(start)
+    .catch(function () { $('#alerts').innerHTML = '<div class="errbox">Could not reach the HomeClaude server. Open this page from the address HomeClaude is running on.</div>'; });
+})();
+</script>
+</body>
+</html>
