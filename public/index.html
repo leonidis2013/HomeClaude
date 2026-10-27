@@ -261,6 +261,11 @@
   .chk.ok .ck { background:var(--ok); color:var(--onacc); } .chk.bad .ck { background:var(--bad); color:#fff; }
   .chk span small { display:block; color:var(--dim); font-size:12px; }
   .ev .dot { margin-top:2px; }
+  .qrwrap { display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap; margin:6px 0 4px; }
+  .qrwrap .qr { background:#fff; padding:6px; border-radius:10px; line-height:0; flex:none; }
+  .qrwrap .qr svg { width:220px; height:220px; }
+  .qrkey { font:600 15px/1.5 var(--mono); letter-spacing:.06em; background:var(--card2); padding:8px 10px; border-radius:8px; word-break:break-all; user-select:all; }
+  #totpCode { font:700 22px var(--mono); letter-spacing:.25em; width:150px; text-align:center; }
   /* ===== setup guide: steps with their status down the left, one step at a time on the right ===== */
   .side.wside { width:236px; flex:0 0 236px; gap:2px; }
   .wzs { display:flex; align-items:flex-start; gap:10px; text-align:left; padding:8px 10px; position:relative; }
@@ -383,6 +388,11 @@
       <div class="card"><h2>Reverse proxy</h2><div id="secProxy"></div></div>
       <div class="card"><h2>Connections from outside</h2><div id="secConns"></div>
         <div class="set"><div class="sl"><span>Revoking cuts a connection off at once. Claude has to sign in again, and you approve it again.</span></div><div class="sc"><button id="secRevokeAll" class="danger">Revoke all</button></div></div>
+      </div>
+      <div class="card">
+        <h2>Approve with an authenticator code</h2>
+        <div class="note" style="margin-bottom:6px">Lets you approve a new Claude connection from anywhere: Claude's sign-in page also accepts the 6-digit code from your authenticator app (Google or Microsoft Authenticator, 1Password, Authy, the iPhone Passwords app).</div>
+        <div id="totpBox"></div>
       </div>
       <div class="card">
         <h2>Access token from outside</h2>
@@ -613,7 +623,8 @@
     return '<ol class="steps"><li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>. Name it <b>HomeClaude</b>.</li><li>Paste this URL:</li></ol>' +
       '<div class="copyrow"><pre class="cmd" id="' + pre + 'Url">' + esc(u) + '</pre><button data-copy="' + pre + 'Url">Copy</button></div>' +
       '<ol class="steps" start="3"><li>Leave Authentication on its default sign-in, and choose <b>Add</b>, then <b>Connect</b>.</li>' +
-      '<li>A HomeClaude page opens with a code like <b>K7Q-2XM</b>. An approval with the same code appears at the top of this page. Check the codes match, choose what Claude may do, and approve.</li>' +
+      '<li>A HomeClaude page opens with a code like <b>K7Q-2XM</b>. An approval with the same code appears at the top of this page. Check the codes match, choose what Claude may do, and approve.' +
+        (sec.totp && sec.totp.enabled && !sec.totp.off ? ' Away from home, type your authenticator code on that page instead.' : '') + '</li>' +
       '<li>The connector then works in Claude Desktop and the phone app too.</li></ol>' +
       (sec.allowTokenRemote ? '<div class="note" style="margin-top:8px">Access token from outside is on, so an app can also use <b>No sign in</b> with the request header <code>Authorization: Bearer &lt;token&gt;</code>.</div>' : '');
   }
@@ -836,12 +847,16 @@
     'client-registered': ['An app registered for sign-in', ''], 'client-metadata-failed': ['Could not read an app\'s details', 'warn'],
     'address-locked': ['Address locked out after failed attempts', 'bad'], 'public-paused': ['Sign-in from outside paused: many failures', 'bad'],
     'pin-lockout': ['Too many wrong PINs', 'bad'], 'admin-refused': ['Blocked a request to the settings port', 'bad'],
+    'code-wrong': ['Wrong authenticator code', 'warn'], 'codes-paused': ['Code approvals paused for an hour', 'bad'],
+    'codes-switched-off': ['Code approvals switched off', 'bad'], 'codes-enabled': ['Authenticator approvals set up', 'ok'],
+    'codes-disabled': ['Authenticator approvals turned off', ''], 'codes-resumed': ['Code approvals switched back on', 'ok'],
     'mode-changed': ['Mode changed', 'warn'], 'token-remote': ['Access token from outside changed', 'warn'], 'token-replaced': ['New access token made', '']
   };
   function evDetail(e) {
     var bits = [];
     if (e.client) bits.push(e.client); if (e.code) bits.push('code ' + e.code); if (e.scope) bits.push((SCOPES.filter(function (x) { return x[0] === e.scope; })[0] || [0, e.scope])[1]);
     if (e.mode) bits.push(e.mode === 'exposed' ? 'Exposed' : 'Local only'); if (e.allowed != null) bits.push(e.allowed ? 'On' : 'Off');
+    if (e.via) bits.push('with ' + e.via);
     if (e.ip) bits.push('from ' + e.ip); if (e.why) bits.push(e.why); if (e.path) bits.push(e.path); if (e.error) bits.push(e.error);
     return bits.join(' · ');
   }
@@ -875,6 +890,7 @@
       $$('[data-revoke]').forEach(function (b) { b.onclick = function () { confirmBox('Revoke this connection?', '<p>It stops working at once. Claude has to sign in again, and you approve it again.</p>', 'Revoke', true).then(function (y) { if (y) api('api/connections/revoke', { id: b.dataset.revoke }).then(function (j) { report(j, 'Could not revoke'); connSig = ''; }); }); }; });
     }
     $('#secRevokeAll').disabled = !(sec.connections || []).length;
+    renderTotp(s);
     paintSeg($('#secTokRemote'), sec.allowTokenRemote ? '1' : '0');
     paintSeg($('#secTokScope'), sec.tokenScope);
     $('#secKey').innerHTML = (sec.keyMismatch ? '<div class="errbox"><b>The encryption key does not match.</b> The saved tokens were encrypted with a different key. Put back the right HOMECLAUDE_MASTER_KEY, or enter the Home Assistant token again.</div>' : '') +
@@ -886,6 +902,61 @@
       var d = EV[e.type] || [e.type, ''];
       return '<div class="arow ev"><span class="dot ' + d[1] + '"></span><div class="an"><b style="font-family:inherit">' + esc(d[0]) + '</b><span style="font-family:inherit;white-space:normal">' + esc(evDetail(e)) + '</span></div><div class="aw">' + esc(ago(e.t)) + '</div></div>';
     }).join('') : '<div class="note" style="padding:10px 0">Nothing yet.</div>';
+  }
+
+  var totpSig = '';
+  function renderTotp(s) {
+    var t = (s.security && s.security.totp) || {}, ex = s.security && s.security.mode === 'exposed';
+    var sig = JSON.stringify(t) + ex;
+    if (sig === totpSig) return;
+    totpSig = sig;
+    var h = '';
+    if (!t.enabled) {
+      h = '<div class="set first"><div class="sl"><b>Not set up</b><span>Takes a minute: scan a QR code with your authenticator app, then type the code it shows.</span></div><div class="sc"><button class="on" id="totpSetup">Set up</button></div></div>';
+    } else {
+      if (t.off) h += '<div class="errbox"><b>Code approvals are switched off.</b> There were 20 wrong codes within 24 hours, so HomeClaude stopped accepting codes. Check the security events. <button class="on" id="totpResume" style="margin-left:6px">Switch back on</button></div>';
+      else if (t.paused) h += '<div class="errbox" style="border-color:var(--warn);background:color-mix(in srgb, var(--warn) 10%, transparent)">Paused for up to an hour after 5 wrong codes. Approving at home still works.</div>';
+      h += chk(true, 'On since ' + esc(when(t.since)), ex ? (t.failsToday ? plural(t.failsToday, 'wrong code') + ' in the last 24 hours' : 'No wrong codes in the last 24 hours') : 'Only used in exposed mode');
+      h += '<div class="set"><div class="sl"><b>A code may approve up to</b><span>Higher levels then still need approval at home</span></div><div class="sc">' + scopeSeg('data-totpmax', 'x', t.maxScope) + '</div></div>';
+      h += '<div class="set"><div class="sl"><span>Got a new phone? Set it up again; the old app\'s codes stop working.</span></div><div class="sc"><button id="totpSetup">Set up again</button><button class="danger" id="totpOff">Turn off</button></div></div>';
+    }
+    $('#totpBox').innerHTML = h;
+    var su = $('#totpSetup'); if (su) su.onclick = setupTotp;
+    var rs = $('#totpResume'); if (rs) rs.onclick = function () { api('api/totp', { action: 'resume' }).then(function (j) { report(j, 'Could not do that'); }); };
+    var of = $('#totpOff'); if (of) of.onclick = function () { confirmBox('Turn off authenticator approvals?', '<p>New connections can then only be approved here at home. Existing connections keep working.</p>', 'Turn off', true).then(function (y) { if (y) api('api/totp', { action: 'disable' }).then(function (j) { report(j, 'Could not turn it off'); }); }); };
+    $$('[data-totpmax] button').forEach(function (b) {
+      b.onclick = function () {
+        var go = function () { api('api/totp', { maxScope: b.dataset.v }).then(function (j) { report(j, 'Could not save'); }); };
+        if (b.dataset.v === 'hands') confirmBox('Allow Hands on with a code?', '<p>Anyone with your phone and its authenticator app could then let Claude act on the home from anywhere.</p>', 'Allow').then(function (y) { if (y) go(); });
+        else go();
+      };
+    });
+  }
+  function setupTotp() {
+    api('api/totp', { action: 'setup' }).then(function (j) {
+      if (!j.ok) { report(j, 'Could not start the setup'); return; }
+      var m = openModal('<div class="mh">Set up your authenticator app</div><div class="mb">' +
+        '<div class="qrwrap"><div class="qr">' + j.svg + '</div><div style="flex:1;min-width:220px">' +
+        '<ol class="steps" style="margin-top:0"><li>In your authenticator app, choose <b>add</b> (often a <b>+</b>) and <b>scan a QR code</b>.</li><li>Scan this code. The app adds <b>HomeClaude</b>.</li><li>Type the 6-digit code it shows, below.</li></ol>' +
+        '<div class="note" style="margin:10px 0 4px">Can\'t scan? Enter this setup key instead (time-based, 6 digits):</div><div class="qrkey">' + esc(j.secret) + '</div>' +
+        '</div></div>' +
+        '<div class="set"><div class="sl"><b>Code from the app</b><span>Proves the app is set up right</span></div><div class="sc"><input id="totpCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></div></div>' +
+        '<div id="totpErr" class="formerr hide"></div>' +
+        '</div><div class="mf"><button id="mCancel">Cancel</button><button id="mGo" class="on">Turn on</button></div>', true);
+      var inp = $('#totpCode', m);
+      inp.addEventListener('input', function () { inp.value = inp.value.replace(/\D/g, '').slice(0, 6); });
+      inp.focus();
+      $('#mCancel', m).onclick = closeModal;
+      var go = function () {
+        api('api/totp', { action: 'confirm', code: inp.value }).then(function (r) {
+          if (r.ok) { closeModal(); toast('Authenticator approvals are on', true); totpSig = ''; return; }
+          if (r.cancelled) return;
+          $('#totpErr', m).textContent = r.error || 'That did not work'; $('#totpErr', m).classList.remove('hide'); inp.value = ''; inp.focus();
+        });
+      };
+      $('#mGo', m).onclick = go;
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+    });
   }
 
   $$('#secMode button').forEach(function (b) {

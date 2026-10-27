@@ -25,6 +25,8 @@ const Tools = require('./lib/tools.js');
 const Health = require('./lib/health.js');
 const Net = require('./lib/netsec.js');
 const OAuth = require('./lib/oauth.js');
+const Totp = require('./lib/totp.js');
+const QR = require('./lib/qr.js');
 const pkg = require('./package.json');
 
 const args = process.argv.slice(2);
@@ -47,7 +49,7 @@ const DEFAULTS = {
   mcpToken: '',
   publicUrl: '',
   backup: { keep: 30 },
-  security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '' },
+  security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '', totp: { enabled: false, secret: '', pending: '', since: 0, lastCounter: 0, maxScope: 'build', off: false } },
   setup: { completed: false, marks: {} }
 };
 
@@ -79,6 +81,7 @@ if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: 
 ['ha', 'access', 'backup', 'setup', 'security'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
 if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
+cfg.security.totp = Object.assign({}, DEFAULTS.security.totp, cfg.security.totp || {});
 
 function changeConfig(mutator) {
   const next = JSON.parse(JSON.stringify(cfg));
@@ -348,7 +351,68 @@ async function restore(b) {
 
 // ---------- exposed mode: Claude's sign-in from outside ----------
 let oauthSaveTimer = null;
+// ---------- approving with an authenticator code ----------
+// Wrong codes: 5 in an hour pause code approvals for the rest of the hour; 20 in a day switch
+// them off until they are switched back on at home. So no one gets more than 20 guesses.
+if (!Array.isArray(state.totpFails)) state.totpFails = [];
+function totpAvailable() {
+  const t = cfg.security.totp;
+  return { ok: !!(t.enabled && t.secret && !t.off && exposed()), maxScope: t.maxScope };
+}
+function totpCheck(code, ip) {
+  const t = cfg.security.totp, now = Date.now();
+  if (t.off) return 'off';
+  state.totpFails = state.totpFails.filter((x) => x > now - 86400e3);
+  if (state.totpFails.filter((x) => x > now - 3600e3).length >= 5) return 'paused';
+  const step = Totp.verify(secrets.dec(t.secret), code, t.lastCounter, now);
+  if (step != null) { changeConfig((c) => { c.security.totp.lastCounter = step; }); return 'ok'; }
+  state.totpFails.push(now); saveState();
+  securityEvent('code-wrong', { ip });
+  if (state.totpFails.length >= 20) {
+    changeConfig((c) => { c.security.totp.off = true; });
+    securityEvent('codes-switched-off', { why: '20 wrong codes in 24 hours' });
+  } else if (state.totpFails.filter((x) => x > now - 3600e3).length >= 5) securityEvent('codes-paused', { why: '5 wrong codes in an hour' });
+  return 'wrong';
+}
+function totpAction(b) {
+  const t = cfg.security.totp;
+  if (b.action === 'setup') {
+    const secret = Totp.newSecret();
+    const r = changeConfig((c) => { c.security.totp.pending = secrets.enc(secret); });
+    if (!r.ok) return r;
+    let account = 'HomeClaude';
+    try { if (cfg.publicUrl) account = new URL(cfg.publicUrl).host; } catch (e) { /* keep */ }
+    const uri = Totp.uri(secret, account, 'HomeClaude');
+    return { ok: true, secret: secret.replace(/(.{4})/g, '$1 ').trim(), uri, svg: QR.svg(uri, 5) };
+  }
+  if (b.action === 'confirm') {
+    const secret = secrets.dec(t.pending);
+    if (!secret) return { ok: false, error: 'Start the setup again' };
+    const step = Totp.verify(secret, b.code, null, Date.now());
+    if (step == null) return { ok: false, error: 'That code does not match. Check the app shows HomeClaude, and that the phone\'s clock is right.' };
+    const r = changeConfig((c) => { Object.assign(c.security.totp, { enabled: true, secret: c.security.totp.pending, pending: '', since: Date.now(), lastCounter: step, off: false }); });
+    if (r.ok) { state.totpFails = []; saveState(); securityEvent('codes-enabled', {}); }
+    return r;
+  }
+  if (b.action === 'disable') {
+    const r = changeConfig((c) => { Object.assign(c.security.totp, { enabled: false, secret: '', pending: '', since: 0, lastCounter: 0, off: false }); });
+    if (r.ok) securityEvent('codes-disabled', {});
+    return r;
+  }
+  if (b.action === 'resume') {
+    const r = changeConfig((c) => { c.security.totp.off = false; });
+    if (r.ok) { state.totpFails = []; saveState(); securityEvent('codes-resumed', {}); }
+    return r;
+  }
+  if (b.maxScope != null) {
+    if (!OAuth.SCOPES.includes(b.maxScope)) return { ok: false, error: 'Unknown permission level' };
+    return changeConfig((c) => { c.security.totp.maxScope = b.maxScope; });
+  }
+  return { ok: false, error: 'Unknown action' };
+}
+
 const oauth = OAuth.create({
+  totp: { available: totpAvailable, check: totpCheck },
   load: () => (DEMO ? {} : readJson(oauthPath, {})),
   save: (db) => {
     if (DEMO) return;
@@ -413,7 +477,8 @@ function securitySnapshot() {
     mode: cfg.security.mode, publicUrl: cfg.publicUrl, publicPort: PUBLIC_PORT, adminPort: PORT,
     allowTokenRemote: cfg.security.allowTokenRemote, tokenScope: cfg.security.tokenScope,
     keyWhere: DEMO ? 'demo' : secrets.where(), keyFileOnVolume: !DEMO && secrets.hasFileKey(), keyMismatch,
-    pending: oauth.listPending(), connections: oauth.connections(), events: state.security.slice(0, 80), selfTest
+    pending: oauth.listPending(), connections: oauth.connections(), events: state.security.slice(0, 80), selfTest,
+    totp: (() => { const t = cfg.security.totp, now = Date.now(); return { enabled: !!t.enabled, since: t.since, maxScope: t.maxScope, off: !!t.off, failsToday: state.totpFails.filter((x) => x > now - 86400e3).length, paused: state.totpFails.filter((x) => x > now - 3600e3).length >= 5 }; })()
   };
 }
 
@@ -614,6 +679,7 @@ const server = http.createServer((req, res) => {
     return oauth.revokeGrant(String(b.id || ''), 'revoked on the HomeClaude page') ? { ok: true } : { ok: false, error: 'That connection is gone' };
   });
   if (req.method === 'POST' && url === '/api/connections/scope') return postJson(req, res, (b) => (oauth.setScope(String(b.id || ''), b.scope) ? { ok: true } : { ok: false, error: 'Could not change it' }));
+  if (req.method === 'POST' && url === '/api/totp') return postJson(req, res, totpAction);
   if (req.method === 'POST' && url === '/api/security/clear') return postJson(req, res, () => { state.security = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/activity-clear') return postJson(req, res, () => { state.activity = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/update-check') {
@@ -692,6 +758,12 @@ const publicServer = http.createServer(async (req, res) => {
       const r = await oauth.authorize(Object.fromEntries(u.searchParams), ip);
       if (r.location) { res.writeHead(302, Object.assign(base(), { location: r.location })); return res.end(); }
       return html(r.status, r.html);
+    }
+    if (req.method === 'POST' && url === '/oauth/approve') {
+      const b = parseForm(req, await readBody(req, 4096));
+      const r = oauth.approveWithCode(b.id, b.s, b.code, b.scope, ip);
+      if (r.status === 401) publicFail(ip, 'wrong authenticator code');
+      return send(r.status, r.body);
     }
     if (req.method === 'GET' && url === '/oauth/status') { const r = oauth.status(u.searchParams.get('id'), u.searchParams.get('s')); return send(r.status, r.body); }
     if (req.method === 'POST' && url === '/oauth/token') {

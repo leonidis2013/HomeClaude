@@ -447,6 +447,81 @@ test('server: exposed mode keeps the settings page private and the public port n
   } finally { proc.kill(); }
 });
 
+const Totp = R('lib/totp'), QR = R('lib/qr');
+test('authenticator codes: RFC 6238 values, clock drift, no replay; QR codes', () => {
+  const key = Buffer.from('12345678901234567890');
+  [[59, '94287082'], [1111111109, '07081804'], [1234567890, '89005924'], [2000000000, '69279037']].forEach(([t, w]) => assert.strictEqual(Totp.hotp(key, Math.floor(t / 30), 8), w));
+  const sec = Totp.base32Encode(key), now = 1793000000000, c = Totp.counterAt(now);
+  assert.strictEqual(Totp.verify(sec, Totp.hotp(key, c), null, now), c);
+  assert.strictEqual(Totp.verify(sec, Totp.hotp(key, c - 1), null, now), c - 1, 'previous 30 s still accepted');
+  assert.strictEqual(Totp.verify(sec, Totp.hotp(key, c - 2), null, now), null, 'older is not');
+  assert.strictEqual(Totp.verify(sec, Totp.hotp(key, c), c, now), null, 'a used code never works again');
+  assert.strictEqual(Totp.verify(sec, 'abcdef', null, now), null);
+  assert.ok(/^otpauth:\/\/totp\/HomeClaude:x\?secret=[A-Z2-7]+&issuer=HomeClaude/.test(Totp.uri(Totp.newSecret(), 'x', 'HomeClaude')));
+  const q = QR.encode(Totp.uri(Totp.newSecret(), 'homeclaude.example.com', 'HomeClaude'));
+  assert.ok(q.size === q.version * 4 + 17 && q.modules[0][0] && q.modules[0][6] && !q.modules[1][1], 'finder pattern in the corner');
+  assert.ok(/^<svg[\s\S]*<\/svg>$/.test(QR.svg('hello')));
+});
+
+test('server: approving with an authenticator code from outside', async () => {
+  const port = await freePort(), pub = await freePort(), dir = tmp('totp');
+  const salt = crypto.randomBytes(16);
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ controlPinHash: 'scrypt:' + salt.toString('hex') + ':' + crypto.scryptSync('2468', salt, 32).toString('hex'), publicUrl: 'https://hc.example.com', security: { mode: 'exposed' }, setup: { completed: true, marks: {} } }));
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(pub), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const H = (extra) => Object.assign({ 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.20', 'x-forwarded-host': 'hc.example.com' }, extra || {});
+  const PIN = { 'x-pin': '2468' };
+  const codeFor = (secret, offset) => Totp.hotp(Totp.base32Decode(secret.replace(/\s/g, '')), Totp.counterAt(Date.now()) + (offset || 0));
+  async function newRequest(ip) {
+    const reg = (await req(pub, 'POST', '/oauth/register', { client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }, H({ 'x-forwarded-for': ip }))).j;
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const q = new URLSearchParams({ response_type: 'code', client_id: reg.client_id, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', code_challenge: b64sha(verifier), code_challenge_method: 'S256', state: 's' });
+    const page = (await req(pub, 'GET', '/oauth/authorize?' + q, undefined, H({ 'x-forwarded-for': ip }))).text;
+    const d = JSON.parse(/<script type="application\/json" id="d">(.*?)<\/script>/.exec(page)[1]);
+    return { d, page, cid: reg.client_id, verifier };
+  }
+  try {
+    for (let i = 0; i < 50 && !/Public port/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    // not set up: no code box, and the endpoint refuses
+    const r0 = await newRequest('203.0.113.20');
+    assert.ok(!r0.d.totp && !/id="c"/.test(r0.page));
+    assert.strictEqual((await req(pub, 'POST', '/oauth/approve', { id: r0.d.id, s: r0.d.s, code: '123456', scope: 'read' }, H())).status, 403);
+    // set up at home: needs the PIN, then a code from the app to switch on
+    assert.strictEqual((await req(port, 'POST', '/api/totp', { action: 'setup' })).status, 401);
+    const setup = (await req(port, 'POST', '/api/totp', { action: 'setup' }, PIN)).j;
+    assert.ok(setup.ok && /<svg/.test(setup.svg) && /^otpauth:\/\/totp\//.test(setup.uri));
+    assert.ok(!(await req(port, 'POST', '/api/totp', { action: 'confirm', code: '000000' }, PIN)).j.ok);
+    assert.ok((await req(port, 'POST', '/api/totp', { action: 'confirm', code: codeFor(setup.secret) }, PIN)).j.ok);
+    assert.ok(!fs.readFileSync(path.join(dir, 'config.json'), 'utf8').includes(setup.secret.replace(/\s/g, '')), 'the secret is stored encrypted');
+    // now the sign-in page has the code box; approve with a code, then sign in
+    const r1 = await newRequest('203.0.113.21');
+    assert.ok(r1.d.totp && /id="c"/.test(r1.page));
+    assert.strictEqual((await req(pub, 'POST', '/oauth/approve', { id: r1.d.id, s: r1.d.s, code: codeFor(setup.secret, 1), scope: 'hands' }, H())).status, 400, 'above the code limit (Help build)');
+    const ok = await req(pub, 'POST', '/oauth/approve', { id: r1.d.id, s: r1.d.s, code: codeFor(setup.secret, 1), scope: 'build' }, H());
+    assert.ok(ok.j.ok, JSON.stringify(ok.j));
+    const st = (await req(pub, 'GET', '/oauth/status?id=' + r1.d.id + '&s=' + r1.d.s, undefined, H())).j;
+    assert.strictEqual(st.status, 'approved');
+    const code = new URL(st.redirect).searchParams.get('code');
+    const tok = await req(pub, 'POST', '/oauth/token', { grant_type: 'authorization_code', client_id: r1.cid, code, code_verifier: r1.verifier, redirect_uri: 'https://claude.ai/api/mcp/auth_callback' }, H());
+    assert.ok(tok.j.access_token);
+    // the same code cannot approve a second request
+    const r2 = await newRequest('203.0.113.22');
+    assert.strictEqual((await req(pub, 'POST', '/oauth/approve', { id: r2.d.id, s: r2.d.s, code: codeFor(setup.secret, 1), scope: 'read' }, H())).status, 401, 'replay refused');
+    // five wrong codes cancel a request, and pause code approvals for the hour
+    for (let i = 0; i < 4; i++) await req(pub, 'POST', '/oauth/approve', { id: r2.d.id, s: r2.d.s, code: '00000' + i, scope: 'read' }, H({ 'x-forwarded-for': '198.51.100.' + (30 + i) }));
+    assert.ok((await req(pub, 'GET', '/oauth/status?id=' + r2.d.id + '&s=' + r2.d.s, undefined, H())).j.status === 'denied', 'request cancelled');
+    const r3 = await newRequest('203.0.113.23');
+    const paused = await req(pub, 'POST', '/oauth/approve', { id: r3.d.id, s: r3.d.s, code: codeFor(setup.secret), scope: 'read' }, H({ 'x-forwarded-for': '198.51.100.50' }));
+    assert.strictEqual(paused.status, 429, 'paused for the hour, even with the right code');
+    const sec = (await req(port, 'GET', '/api/state')).j.security;
+    assert.ok(sec.totp.enabled && sec.totp.paused && sec.events.some((e) => e.type === 'codes-paused') && sec.events.some((e) => e.via === 'authenticator code'));
+    // approving at home still works while paused
+    const pend = sec.pending.find((p) => p.ip === '203.0.113.23');
+    assert.ok((await req(port, 'POST', '/api/connections/decide', { id: pend.id, approve: true, scope: 'read' }, PIN)).j.ok);
+  } finally { proc.kill(); }
+});
+
 test('server: token, origin, access switch, PIN, live Home Assistant settings', async () => {
   const f = await fakeHa();
   const port = await freePort(), dir = tmp('srv');
