@@ -420,8 +420,7 @@
       </div>
       <div class="card">
         <h2>Access token from outside</h2>
-        <div class="set first"><div class="sl"><b>Accept the access token over the public address</b><span>Off (recommended): only signed-in, approved connections work from outside. On: apps that send the token as a header work too, with the permission below</span></div><div class="sc"><div class="seg" id="secTokRemote"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
-        <div class="set"><div class="sl"><b>The token may</b><span>Never more than Permissions allows; deleting and restarting never work from outside</span></div><div class="sc"><div class="seg" id="secTokScope"><button data-v="read">Look only</button><button data-v="build">Help build</button><button data-v="hands">Hands on</button></div></div></div>
+        <div class="set first"><div class="sl"><b>Accept the access token over the public address</b><span>Off (recommended): only signed-in, approved connections work from outside. On: apps that send the token as a header work too, at the level set under Permissions</span></div><div class="sc"><div class="seg" id="secTokRemote"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
       </div>
       <div class="card"><h2>Encryption</h2><div id="secKey"></div></div>
       <div class="card"><h2>Security events</h2><div class="alist" id="secEvents"></div>
@@ -482,17 +481,18 @@
     </div>
 
     <div data-pane="perm" class="hide">
-      <div class="note pnote">Claude can always read: states, history, logs, traces, integrations, repairs and configs. What it may change is up to you. These rules are checked in HomeClaude, so they hold whatever Claude asks for.</div>
+      <div class="note pnote">Everything Claude may do, in one place: one set of levels, given to Claude on your network and to each connection from outside. These rules are checked in HomeClaude, so they hold whatever Claude asks for. How Claude gets in (sign-in, access time, revoking) is in the Security tab.</div>
       <div class="card">
         <h2>Claude access</h2>
         <div class="set first"><div class="sl"><b>Allow Claude to connect</b><span>Off refuses every request, without changing the token</span></div><div class="sc"><div class="seg" id="pEnabled"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
       </div>
       <div class="card">
-        <h2>What Claude may change</h2>
-        <div class="set first feat"><div class="sl"><b>Edit automations and scripts</b><span>Create and change them, and reload YAML. The old version is backed up first</span></div><div class="sc"><div class="seg" data-perm="edit"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
-        <div class="set feat"><div class="sl"><b>Call services</b><span>Turn things on and off, run scripts, send notifications. This acts on the real home</span></div><div class="sc"><div class="seg" data-perm="services"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
-        <div class="set feat"><div class="sl"><b>Delete automations and scripts</b><span>Backed up first, so they can be restored from Backups</span></div><div class="sc"><div class="seg" data-perm="delete"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
-        <div class="set feat"><div class="sl"><b>Restart Home Assistant</b><span>Only after its configuration check passes</span></div><div class="sc"><div class="seg" data-perm="restart"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <h2>Levels</h2>
+        <div id="lvlTable"></div>
+      </div>
+      <div class="card">
+        <h2>Who may do what</h2>
+        <div id="whoBox"></div>
       </div>
       <div class="card">
         <h2>Review Claude's changes</h2>
@@ -698,11 +698,12 @@
   function row(label, value) { return '<div class="row"><div class="rl">' + esc(label) + '</div><div class="rv">' + value + '</div><div></div></div>'; }
   function chips(list) { return '<div class="chips">' + list.map(function (c) { return '<span class="chip ' + (c[1] || '') + '">' + esc(c[0]) + '</span>'; }).join('') + '</div>'; }
   var PERMS = [['edit', 'Edit'], ['services', 'Services'], ['delete', 'Delete'], ['restart', 'Restart']];
-  function modeText(a) {
-    if (!a.enabled) return 'Off';
-    var on = PERMS.filter(function (p) { return a[p[0]]; });
-    return on.length ? 'Read + ' + on.map(function (p) { return p[1].toLowerCase(); }).join(', ') : 'Read only';
-  }
+  var LVL = [['read', 'Look only', 'Read everything: states, history, logs, traces, integrations, automation and script configs. Change nothing.'],
+    ['build', 'Help build', 'Also create and change automations and scripts, and reload YAML. Every change is backed up and waits for your Keep or Revert.'],
+    ['hands', 'Hands on', 'Also run services: turn things on and off, run scripts, send notifications. This acts on the real home.'],
+    ['full', 'Full', 'Also delete automations and scripts, and restart Home Assistant (only after its config check passes). Only on your network, never from outside.']];
+  var LVL_NAME = { read: 'Look only', build: 'Help build', hands: 'Hands on', full: 'Full' };
+  function modeText(a) { return a.enabled ? LVL_NAME[a.local] || 'Look only' : 'Off'; }
 
   function actRows(list, max) {
     if (!list.length) return '<div class="note" style="padding:12px 0">Nothing yet. When Claude uses HomeClaude, every request shows up here.</div>';
@@ -719,7 +720,8 @@
     else if (st.ok) out.push('<span class="st ok"><span class="dot ok"></span>Home Assistant ' + esc(st.version) + '</span>');
     else out.push('<span class="st bad"><span class="dot bad"></span>Home Assistant unreachable</span>');
     var mt = modeText(a);
-    out.push('<span class="st ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"><span class="dot ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"></span>Claude: ' + esc(mt) + '</span>');
+    var lc = !a.enabled ? 'bad' : a.local === 'read' ? 'ok' : 'warn';
+    out.push('<span class="st ' + lc + '"><span class="dot ' + lc + '"></span>Claude: ' + esc(mt) + '</span>');
     if (s.lastCallAt) out.push('<span class="st"><span class="dot acc"></span>Last request ' + esc(ago(s.lastCallAt)) + '</span>');
     var sec = s.security || {};
     if (sec.mode === 'exposed') out.push('<span class="st warn"><span class="dot warn"></span>Exposed</span>');
@@ -782,13 +784,14 @@
 
     // Claude access card
     var mt = modeText(a);
-    $('#accCard').className = 'dev ' + (!a.enabled ? 'off' : mt === 'Read only' ? '' : 'upd');
-    $('#accDot').className = 'dot ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn');
+    var sc0 = s.security || {}, anyWrite = a.local !== 'read' || (sc0.mode === 'exposed' && (sc0.connections || []).some(function (c) { return c.effective !== 'read'; }));
+    $('#accCard').className = 'dev ' + (!a.enabled ? 'off' : anyWrite ? 'upd' : '');
+    $('#accDot').className = 'dot ' + (!a.enabled ? 'bad' : anyWrite ? 'warn' : 'ok');
     paintSeg($('#accSeg'), a.enabled ? '1' : '0');
-    $('#accSub').textContent = a.enabled ? (mt === 'Read only' ? 'Claude can look, not touch' : 'Claude can make changes') : 'Every request is refused';
+    $('#accSub').textContent = a.enabled ? (anyWrite ? 'Claude can make changes' : 'Claude can look, not touch') : 'Every request is refused';
     var on = (s.tools || []).filter(function (t) { return t.on; }).length;
-    var rr = row('Mode', esc(mt));
-    rr += row('Changes', chips(PERMS.map(function (p) { return [p[1], a[p[0]] ? 'w' : '']; })));
+    var rr = row('Your network', esc(mt));
+    if (sc0.mode === 'exposed') rr += row('From outside', (sc0.connections || []).length ? (sc0.connections || []).map(function (c) { return esc(c.client) + ': ' + esc(LVL_NAME[c.effective]); }).join('<br>') : 'No connections') ;
     rr += row('Blocked', a.blocked.length ? chips(a.blocked.map(function (d) { return [d, 'b']; })) : '<span class="up">Nothing blocked</span>');
     rr += row('Tools', on + ' of ' + (s.tools || []).length);
     var sc = s.security || {};
@@ -823,7 +826,7 @@
       return '<div class="rhist"><span class="dot ' + (r.status === 'kept' ? 'ok' : r.status === 'reverted' ? 'warn' : '') + '"></span><span><b>' + esc(r.alias) + '</b> <small>' + esc(r.kind) + ' ' + esc(r.action || 'made and deleted again') + ' by ' + esc(r.who || 'Claude') + '</small></span>' +
         '<small>' + esc(r.status === 'withdrawn' ? 'nothing left to review' : r.status + (r.by && r.by !== 'you' ? ' (' + r.by + ')' : '')) + ' · ' + esc(ago(r.decidedAt)) + '</small></div>';
     }).join('') : '<div class="note">Nothing yet. Kept and reverted changes show up here.</div>';
-    $$('[data-perm]').forEach(function (el) { paintSeg(el, a[el.dataset.perm] ? '1' : '0'); });
+    renderWho(s);
     if (!blkLoaded) { $('#pBlocked').value = a.blocked.join(', '); blkLoaded = true; }
     $('#toolList').innerHTML = (s.tools || []).map(function (t) {
       return '<div class="tl' + (t.on ? '' : ' off') + '"><b>' + esc(t.name) + '</b><span>' + esc(t.title) + '</span>' + (t.needs ? '<span class="chip ' + (t.on ? 'w' : '') + '">' + (t.on ? 'change' : 'off') + '</span>' : '<span class="chip o">read</span>') + '</div>';
@@ -1024,7 +1027,7 @@
       $('#secConns').innerHTML = (sec.connections || []).length ? sec.connections.map(function (c) {
         return '<div class="conn"><div class="ci"><b>' + esc(c.client) + '</b><span>Signed in ' + esc(when(c.createdAt)) + ' · ' + (c.lastUsedAt ? 'last used ' + esc(ago(c.lastUsedAt)) + (c.lastIp ? ' from ' + esc(c.lastIp) : '') : 'not used yet') + ' · ' + plural(c.uses, 'request') + '</span>' +
           '<span class="acc-left">' + (c.expiresAt ? 'Access ends in <b data-until="' + Number(c.expiresAt) + '">' + left(c.expiresAt - Date.now()) + '</b>' : 'No time limit (ends after 30 days unused)') + '</span></div>' +
-          scopeSeg('data-cscope', c.id, c.scope) + '<span class="cspan">' + spanSelect('data-cspan', c.id, '') + '</span><button class="danger" data-revoke="' + esc(c.id) + '">Revoke</button></div>';
+          '<span class="note">' + esc(LVL_NAME[c.effective] || c.effective) + ' · <button class="link" data-golvl>change</button></span><span class="cspan">' + spanSelect('data-cspan', c.id, '') + '</span><button class="danger" data-revoke="' + esc(c.id) + '">Revoke</button></div>';
       }).join('') : '<div class="note">' + (ex ? 'None yet. When Claude signs in from outside and you approve it, it shows up here.' : 'None. Connections from outside need exposed mode.') + '</div>';
       $$('[data-cspan]').forEach(function (sel) {
         sel.insertAdjacentHTML('afterbegin', '<option value="" selected disabled>Access time…</option>');
@@ -1036,7 +1039,7 @@
           });
         };
       });
-      $$('[data-cscope]').forEach(function (g) { $$('button', g).forEach(function (b) { b.onclick = function () { api('api/connections/scope', { id: g.dataset.cscope, scope: b.dataset.v }).then(function (j) { report(j, 'Could not change it'); connSig = ''; }); }; }); });
+      $$('[data-golvl]').forEach(function (b) { b.onclick = function () { showTab(true); showSub('perm'); }; });
       $$('[data-revoke]').forEach(function (b) { b.onclick = function () { confirmBox('Revoke this connection?', '<p>It stops working at once. Claude has to sign in again, and you approve it again.</p>', 'Revoke', true).then(function (y) { if (y) api('api/connections/revoke', { id: b.dataset.revoke }).then(function (j) { report(j, 'Could not revoke'); connSig = ''; }); }); }; });
     }
     $('#secRevokeAll').disabled = !(sec.connections || []).length;
@@ -1045,7 +1048,6 @@
     if (!ss.options.length) ss.innerHTML = SPANS.map(function (x) { return '<option value="' + x[0] + '">' + x[1] + '</option>'; }).join('');
     if (document.activeElement !== ss) ss.value = sec.accessDefault || 'none';
     paintSeg($('#secTokRemote'), sec.allowTokenRemote ? '1' : '0');
-    paintSeg($('#secTokScope'), sec.tokenScope);
     $('#secKey').innerHTML = (sec.keyMismatch ? '<div class="errbox"><b>The encryption key does not match.</b> The saved tokens were encrypted with a different key. Put back the right HOMECLAUDE_MASTER_KEY, or enter the Home Assistant token again.</div>' : '') +
       chk(true, 'Tokens are encrypted at rest (AES-256-GCM)', 'The Home Assistant token and Claude\'s access token. Sign-in tokens are stored only as hashes, never readable.') +
       (sec.keyWhere === 'master' ? chk(true, 'The key comes from the app\'s environment', 'HOMECLAUDE_MASTER_KEY is set, and no key is stored on the data volume. A copy of the volume alone cannot be decrypted.')
@@ -1070,20 +1072,13 @@
       if (t.off) h += '<div class="errbox"><b>Code approvals are switched off.</b> There were 20 wrong codes within 24 hours, so HomeClaude stopped accepting codes. Check the security events. <button class="on" id="totpResume" style="margin-left:6px">Switch back on</button></div>';
       else if (t.paused) h += '<div class="errbox" style="border-color:var(--warn);background:color-mix(in srgb, var(--warn) 10%, transparent)">Paused for up to an hour after 5 wrong codes. Approving at home still works.</div>';
       h += chk(true, 'On since ' + esc(when(t.since)), ex ? (t.failsToday ? plural(t.failsToday, 'wrong code') + ' in the last 24 hours' : 'No wrong codes in the last 24 hours') : 'Only used in exposed mode');
-      h += '<div class="set"><div class="sl"><b>A code may approve up to</b><span>Higher levels then still need approval at home</span></div><div class="sc">' + scopeSeg('data-totpmax', 'x', t.maxScope) + '</div></div>';
+      h += '<div class="set"><div class="sl"><span>A code may approve up to <b>' + esc(LVL_NAME[t.maxScope]) + '</b>. Change it under Permissions.</span></div></div>';
       h += '<div class="set"><div class="sl"><span>Got a new phone? Set it up again; the old app\'s codes stop working.</span></div><div class="sc"><button id="totpSetup">Set up again</button><button class="danger" id="totpOff">Turn off</button></div></div>';
     }
     $('#totpBox').innerHTML = h;
     var su = $('#totpSetup'); if (su) su.onclick = setupTotp;
     var rs = $('#totpResume'); if (rs) rs.onclick = function () { api('api/totp', { action: 'resume' }).then(function (j) { report(j, 'Could not do that'); }); };
     var of = $('#totpOff'); if (of) of.onclick = function () { confirmBox('Turn off authenticator approvals?', '<p>New connections can then only be approved here at home. Existing connections keep working.</p>', 'Turn off', true).then(function (y) { if (y) api('api/totp', { action: 'disable' }).then(function (j) { report(j, 'Could not turn it off'); }); }); };
-    $$('[data-totpmax] button').forEach(function (b) {
-      b.onclick = function () {
-        var go = function () { api('api/totp', { maxScope: b.dataset.v }).then(function (j) { report(j, 'Could not save'); }); };
-        if (b.dataset.v === 'hands') confirmBox('Allow Hands on with a code?', '<p>Anyone with your phone and its authenticator app could then let Claude act on the home from anywhere.</p>', 'Allow').then(function (y) { if (y) go(); });
-        else go();
-      };
-    });
   }
   function setupTotp() {
     api('api/totp', { action: 'setup' }).then(function (j) {
@@ -1132,7 +1127,6 @@
       else go();
     };
   });
-  $$('#secTokScope button').forEach(function (b) { b.onclick = function () { api('api/security', { tokenScope: b.dataset.v }).then(function (j) { report(j, 'Could not save'); }); }; });
   $('#secRevokeAll').onclick = function () { confirmBox('Revoke all connections from outside?', '<p>Every Claude app signed in from outside stops working at once and has to sign in and be approved again.</p>', 'Revoke all', true).then(function (y) { if (y) api('api/connections/revoke', { all: true }).then(function (j) { report(j, 'Could not revoke'); connSig = ''; }); }); };
   $('#secClear').onclick = function () { confirmBox('Clear the security events?', '<p>Only this list is emptied.</p>', 'Clear', true).then(function (y) { if (y) api('api/security/clear', {}); }); };
 
@@ -1186,20 +1180,39 @@
   $$('#rvWhat button').forEach(function (b) { b.onclick = function () { api('api/review', { ifNoAnswer: b.dataset.v }).then(function (j) { report(j, 'Could not save'); }); }; });
   $$('#pEnabled button').forEach(function (b) { b.onclick = function () { setAccess({ enabled: b.dataset.v === '1' }); }; });
 
-  var PERM_WARN = {
-    services: 'Claude will be able to run services that act on the real home: lights, switches, scripts, notifications. Blocked domains stay blocked.',
-    delete: 'Claude will be able to delete automations and scripts. Each one is backed up first and can be restored from Backups.',
-    restart: 'Claude will be able to restart Home Assistant (after a passing config check). Everything is unavailable for a minute or so.'
-  };
-  $$('[data-perm]').forEach(function (el) {
-    $$('button', el).forEach(function (b) {
-      b.onclick = function () {
-        var on = b.dataset.v === '1', patch = {}; patch[el.dataset.perm] = on;
-        if (on && PERM_WARN[el.dataset.perm]) confirmBox('Allow this?', '<p>' + esc(PERM_WARN[el.dataset.perm]) + '</p>', 'Allow').then(function (y) { if (y) setAccess(patch); });
-        else setAccess(patch);
-      };
-    });
-  });
+  $('#lvlTable').innerHTML = LVL.map(function (l) { return '<div class="tl"><b style="min-width:92px;font-family:inherit">' + esc(l[1]) + '</b><span>' + esc(l[2]) + '</span></div>'; }).join('') +
+    '<div class="note" style="margin-top:8px">Each level includes the ones above it. Blocked domains (below) stay blocked at every level.</div>';
+  var LVL_WARN = { hands: 'Claude will be able to run services that act on the real home: lights, switches, scripts, notifications. Blocked domains stay blocked.',
+    full: 'Claude will also be able to delete automations and scripts (backed up first) and restart Home Assistant (after a passing config check).' };
+  function lvlSeg(attr, id, cur, max) {
+    return '<div class="seg" ' + attr + '="' + esc(id) + '">' + LVL.filter(function (l) { return LEVELS_UP_TO(max).indexOf(l[0]) >= 0; }).map(function (l) {
+      return '<button data-v="' + l[0] + '"' + (cur === l[0] ? ' class="on"' : '') + '>' + l[1] + '</button>'; }).join('') + '</div>';
+  }
+  function LEVELS_UP_TO(max) { var all = ['read', 'build', 'hands', 'full']; return all.slice(0, all.indexOf(max) + 1); }
+  function raise(level, fn) { if (LVL_WARN[level]) confirmBox('Allow ' + LVL_NAME[level] + '?', '<p>' + esc(LVL_WARN[level]) + '</p>', 'Allow').then(function (y) { if (y) fn(); }); else fn(); }
+  var whoSig = '';
+  function renderWho(s) {
+    var a = s.access, sec = s.security || {}, ex = sec.mode === 'exposed', t = sec.totp || {};
+    var sig = JSON.stringify([a.local, a.outsideMax, ex, (sec.connections || []).map(function (c) { return [c.id, c.scope, c.effective]; }), sec.allowTokenRemote, sec.tokenScope, t.enabled, t.maxScope]);
+    if (sig === whoSig) return;
+    whoSig = sig;
+    var cap = function (lvl) { var e = LEVELS_UP_TO(a.outsideMax).indexOf(lvl) >= 0 ? lvl : a.outsideMax; return e !== lvl ? '<span class="warn2" style="font-size:12px"> · limited to ' + esc(LVL_NAME[e]) + ' by the outside limit</span>' : ''; };
+    var h = '<div class="set first"><div class="sl"><b>Claude on your network</b><span>Claude Code with the access token, on HomeClaude\'s private port</span></div><div class="sc">' + lvlSeg('data-lvl', 'local', a.local, 'full') + '</div></div>';
+    h += '<div class="set"><div class="sl"><b>Highest level from outside</b><span>A limit over every connection through the public address. Full is never allowed from outside</span></div><div class="sc">' + lvlSeg('data-lvl', 'outsideMax', a.outsideMax, 'hands') + '</div></div>';
+    if (ex) {
+      (sec.connections || []).forEach(function (c) {
+        h += '<div class="set"><div class="sl"><b>' + esc(c.client) + '</b><span>Connection from outside, signed in ' + esc(when(c.createdAt)) + cap(c.scope) + '</span></div><div class="sc">' + lvlSeg('data-clvl', c.id, c.scope, 'hands') + '</div></div>';
+      });
+      if (!(sec.connections || []).length) h += '<div class="set"><div class="sl"><span>No connections from outside yet. When you approve one, you choose its level, and it appears here.</span></div></div>';
+      if (sec.allowTokenRemote) h += '<div class="set"><div class="sl"><b>Access token from outside</b><span>Apps that send the token as a header over the public address' + cap(sec.tokenScope) + '</span></div><div class="sc">' + lvlSeg('data-tlvl', 'x', sec.tokenScope, 'hands') + '</div></div>';
+      if (t.enabled) h += '<div class="set"><div class="sl"><b>Approving with an authenticator code</b><span>The highest level a code may grant; higher still needs approval at home</span></div><div class="sc">' + lvlSeg('data-qlvl', 'x', t.maxScope, 'hands') + '</div></div>';
+    } else h += '<div class="set"><div class="sl"><span>Connections from outside appear here when exposed mode is on (Security tab).</span></div></div>';
+    $('#whoBox').innerHTML = h;
+    $$('[data-lvl] button').forEach(function (b) { b.onclick = function () { var k = b.parentNode.dataset.lvl, patch = {}; patch[k] = b.dataset.v; raise(b.dataset.v, function () { setAccess(patch).then(function () { whoSig = ''; }); }); }; });
+    $$('[data-clvl] button').forEach(function (b) { b.onclick = function () { var id = b.parentNode.dataset.clvl; raise(b.dataset.v, function () { api('api/connections/scope', { id: id, scope: b.dataset.v }).then(function (j) { report(j, 'Could not change it'); whoSig = ''; connSig = ''; }); }); }; });
+    $$('[data-tlvl] button').forEach(function (b) { b.onclick = function () { raise(b.dataset.v, function () { api('api/security', { tokenScope: b.dataset.v }).then(function (j) { report(j, 'Could not save'); whoSig = ''; }); }); }; });
+    $$('[data-qlvl] button').forEach(function (b) { b.onclick = function () { raise(b.dataset.v, function () { api('api/totp', { maxScope: b.dataset.v }).then(function (j) { report(j, 'Could not save'); whoSig = ''; }); }); }; });
+  }
   function setAccess(patch) { return api('api/access', patch).then(function (j) { report(j, 'Could not save'); return j; }); }
   $('#pBlockedSave').onclick = function () {
     var v = $('#pBlocked').value;
@@ -1433,7 +1446,7 @@
       $('#wzTok').addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
     }
     if (id === 'perms') {
-      var a = s.access, cur = wzPick || (a.services ? 'hands' : a.edit ? 'build' : 'look');
+      var a = s.access, cur = wzPick || ({ read: 'look', build: 'build', hands: 'hands', full: 'hands' })[a.local] || 'look';
       var P = [
         ['look', 'Look only', 'Claude can read everything (states, history, logs, traces, automations) and change nothing. Good to start with.', true],
         ['build', 'Help build', 'Also create and change automations and scripts, and reload YAML. Each change is backed up first and can be restored.'],
@@ -1444,13 +1457,13 @@
           return '<button class="pick' + (cur === p[0] ? ' on' : '') + '" data-pick="' + p[0] + '"><span class="rb"></span><span><b>' + esc(p[1]) + (p[3] ? '<span class="tag2">Recommended</span>' : '') + '</b><span>' + esc(p[2]) + '</span></span></button>';
         }).join('') + '</div>' +
         '<p>Always blocked, whatever you choose: ' + a.blocked.map(function (d) { return '<span class="chip b">' + esc(d) + '</span>'; }).join(' ') + '. Claude can see them, but cannot unlock, open or disarm anything, or write automations that do.</p>' +
-        '<p>Deleting and restarting stay off. You can change all of this later under <b>Permissions</b>.</p></div>' +
+        '<p>This is the level for Claude on your network. Connections from outside each get their own level when you approve them. Deleting and restarting (the Full level) stay off. You can change all of this later under <b>Permissions</b>.</p></div>' +
         foot('Use this');
       $$('[data-pick]', pane).forEach(function (b) { b.onclick = function () { wzPick = b.dataset.pick; renderWizard(snap); }; });
       wire(function () {
         var pick = wzPick || cur;
         var go = function () {
-          return api('api/access', { enabled: true, edit: pick !== 'look', services: pick === 'hands' }).then(function (j) {
+          return api('api/access', { enabled: true, local: pick === 'look' ? 'read' : pick }).then(function (j) {
             if (!j.ok) { report(j, 'Could not save'); return false; }
             return mark('perms').then(function () { return true; });
           });
@@ -1533,7 +1546,7 @@
     $$('#sub button').forEach(function (b) { b.classList.toggle('on', b.dataset.sub === name); });
     $$('[data-pane]').forEach(function (p) { p.classList.toggle('hide', p.dataset.pane !== name); });
     if (name === 'ha') haLoaded = false;
-    if (name === 'perm') blkLoaded = false;
+    if (name === 'perm') { blkLoaded = false; whoSig = ''; }
     if (name === 'backups') { bkSig = null; }
     if (name === 'settings') { keepLoaded = false; paintSeg($('#themeSeg'), themePref); }
     if (snap) updateSettings(snap);

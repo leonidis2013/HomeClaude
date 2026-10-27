@@ -45,7 +45,8 @@ const IN_DOCKER = fs.existsSync('/.dockerenv');
 // ---------- config (saved from the web page) ----------
 const DEFAULTS = {
   ha: { url: '', token: '' },
-  access: { enabled: true, edit: false, services: false, delete: false, restart: false, blocked: Guard.DEFAULT_BLOCKED.slice() },
+  // one scale of levels: read < build < hands < full. local: Claude on your network; outsideMax: ceiling for every connection from outside
+  access: { enabled: true, local: 'read', outsideMax: 'hands', blocked: Guard.DEFAULT_BLOCKED.slice() },
   mcpToken: '',
   publicUrl: '',
   backup: { keep: 30 },
@@ -81,6 +82,24 @@ let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), savedCfg);
 if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: true, marks: {} };
 ['ha', 'access', 'backup', 'setup', 'security', 'review'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
+// ---------- permission levels ----------
+const LEVELS = ['read', 'build', 'hands', 'full'];
+const LEVEL_FLAGS = { read: {}, build: { edit: true }, hands: { edit: true, services: true }, full: { edit: true, services: true, delete: true, restart: true } };
+const levelFromFlags = (f) => (f.delete || f.restart ? 'full' : f.services ? 'hands' : f.edit ? 'build' : 'read');
+const lowerLevel = (a, b) => LEVELS[Math.min(LEVELS.indexOf(a), LEVELS.indexOf(b))];
+// settings saved before levels existed: the four switches become the level for your network
+if (savedCfg.access && savedCfg.access.local == null) cfg.access.local = levelFromFlags(savedCfg.access);
+['edit', 'services', 'delete', 'restart'].forEach((k) => { delete cfg.access[k]; });
+if (!LEVELS.includes(cfg.access.local)) cfg.access.local = 'read';
+if (!['read', 'build', 'hands'].includes(cfg.access.outsideMax)) cfg.access.outsideMax = 'hands';
+/** What a level allows. From outside: never above the outside ceiling, never above Hands on (no delete or restart). */
+function accessFor(level, remote) {
+  let l = LEVELS.includes(level) ? level : 'read';
+  if (remote) l = lowerLevel(lowerLevel(l, cfg.access.outsideMax), 'hands');
+  const f = LEVEL_FLAGS[l];
+  return { enabled: cfg.access.enabled, blocked: cfg.access.blocked, level: l, edit: !!f.edit, services: !!f.services, delete: !!f.delete, restart: !!f.restart };
+}
+const localAccess = () => accessFor(cfg.access.local, false);
 if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
 cfg.security.totp = Object.assign({}, DEFAULTS.security.totp, cfg.security.totp || {});
 
@@ -175,7 +194,7 @@ function pinOk(given) {
 // ---------- Home Assistant ----------
 const ha = DEMO ? require('./lib/demo.js').client() : Ha.create({ getUrl: () => cfg.ha.url, getToken: () => secrets.dec(cfg.ha.token) });
 const backups = Backups.create({ dir: path.join(dataDir, 'backups'), keep: () => cfg.backup.keep });
-const tools = Tools.create({ ha, backups, access: () => cfg.access, onChange: (info, who) => recordChange(info, who), reviewInfo: () => reviewInfo() });
+const tools = Tools.create({ ha, backups, access: localAccess, onChange: (info, who) => recordChange(info, who), reviewInfo: () => reviewInfo() });
 
 // ---------- keep or revert: every change Claude makes goes live, and you decide afterwards ----------
 const REVIEW_TIMES = [0, 15, 60, 240, 1440];
@@ -293,15 +312,8 @@ function logActivity(entry) {
 function argSummary(a) {
   try { const s = JSON.stringify(a || {}); return s === '{}' ? '' : s.length > 220 ? s.slice(0, 217) + '...' : s; } catch (e) { return ''; }
 }
-/**
- * What a connection from outside may do: never more than the global settings, never
- * more than was chosen when it was approved, and never delete or restart.
- */
-const SCOPE_TEXT = { read: 'Look only', build: 'Help build', hands: 'Hands on' };
-function capAccess(scope) {
-  const a = cfg.access;
-  return { enabled: a.enabled, blocked: a.blocked, edit: !!a.edit && (scope === 'build' || scope === 'hands'), services: !!a.services && scope === 'hands', delete: false, restart: false };
-}
+/** A connection from outside: the level it was given, under the outside ceiling, never delete or restart. */
+const capAccess = (scope) => accessFor(scope, true);
 const callLimit = Net.limiter({ max: 120, windowMs: 60e3, lockMs: 60e3 });
 const mcp = Mcp.create({
   serverInfo: { name: 'homeclaude', title: 'HomeClaude (Home Assistant)', version: pkg.version },
@@ -375,7 +387,16 @@ function setHa(b) {
 
 function setAccess(b) {
   return changeConfig((c) => {
-    ['enabled', 'edit', 'services', 'delete', 'restart'].forEach((k) => { if (typeof b[k] === 'boolean') c.access[k] = b[k]; });
+    if (typeof b.enabled === 'boolean') c.access.enabled = b.enabled;
+    if (b.local != null) { if (!LEVELS.includes(b.local)) return 'Unknown level'; c.access.local = b.local; }
+    if (b.outsideMax != null) { if (!['read', 'build', 'hands'].includes(b.outsideMax)) return 'From outside the highest level is Hands on'; c.access.outsideMax = b.outsideMax; }
+    // the older switch names still work (setup guide, scripts): they adjust the level for your network
+    if (['edit', 'services', 'delete', 'restart'].some((k) => typeof b[k] === 'boolean')) {
+      const f = Object.assign({}, LEVEL_FLAGS[c.access.local]);
+      ['edit', 'services', 'delete', 'restart'].forEach((k) => { if (typeof b[k] === 'boolean') f[k] = b[k]; });
+      if (!f.edit) { f.services = false; f.delete = false; f.restart = false; }
+      c.access.local = levelFromFlags(f);
+    }
     if (b.blocked != null) c.access.blocked = Guard.cleanDomains(b.blocked);
   });
 }
@@ -551,7 +572,7 @@ function securitySnapshot() {
     mode: cfg.security.mode, publicUrl: cfg.publicUrl, accessDefault: cfg.security.accessDefault, publicPort: PUBLIC_PORT, adminPort: PORT,
     allowTokenRemote: cfg.security.allowTokenRemote, tokenScope: cfg.security.tokenScope,
     keyWhere: DEMO ? 'demo' : secrets.where(), keyFileOnVolume: !DEMO && secrets.hasFileKey(), keyMismatch,
-    pending: oauth.listPending(), connections: oauth.connections(), events: state.security.slice(0, 80), selfTest,
+    pending: oauth.listPending(), connections: oauth.connections().map((c) => Object.assign(c, { effective: accessFor(c.scope, true).level })), events: state.security.slice(0, 80), selfTest,
     totp: (() => { const t = cfg.security.totp, now = Date.now(); return { enabled: !!t.enabled, since: t.since, maxScope: t.maxScope, off: !!t.off, failsToday: state.totpFails.filter((x) => x > now - 86400e3).length, paused: state.totpFails.filter((x) => x > now - 3600e3).length >= 5 }; })()
   };
 }
@@ -579,13 +600,14 @@ function backupCount() {
 }
 const backupsChanged = () => { bkCache.at = 0; };
 function describeTools() {
-  return tools.all().map((t) => ({ name: t.name, title: t.title, needs: t.needs || null, on: !t.needs || !!cfg.access[t.needs] }));
+  const a = localAccess();
+  return tools.all().map((t) => ({ name: t.name, title: t.title, needs: t.needs || null, on: !t.needs || !!a[t.needs] }));
 }
 function snapshot() {
   return {
     version: pkg.version, now: Date.now(), demo: DEMO,
     ha: { url: DEMO ? ha.base() : cfg.ha.url, hasToken: DEMO || !!cfg.ha.token, status: haStatus },
-    access: cfg.access,
+    access: Object.assign({}, cfg.access, localAccess()),
     tools: describeTools(),
     publicUrl: cfg.publicUrl,
     backup: { keep: cfg.backup.keep },

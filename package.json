@@ -1,6 +1,6 @@
 {
   "name": "homeclaude",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Bridge between Claude and Home Assistant (Model Context Protocol) for development and troubleshooting, using only Home Assistant's own APIs",
   "main": "server.js",
   "scripts": {

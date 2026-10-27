@@ -612,6 +612,33 @@ test('server: keep or revert Claude\'s changes', async () => {
   } finally { proc.kill(); await f.close(); }
 });
 
+test('server: one set of permission levels, with the outside limit', async () => {
+  const port = await freePort(), dir = tmp('lvl');
+  // settings saved before levels existed: edit + services on
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ access: { enabled: true, edit: true, services: true, delete: false, restart: false, blocked: ['lock'] } }));
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    let a = (await req(port, 'GET', '/api/state')).j.access;
+    assert.strictEqual(a.local, 'hands', 'old switches became a level'); assert.strictEqual(a.outsideMax, 'hands');
+    assert.ok(a.edit && a.services && !a.delete && a.edit === true);
+    const names = async () => { const tok = (await req(port, 'POST', '/api/token', {})).j.token; return (await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { authorization: 'Bearer ' + tok })).j.result.tools.map((t) => t.name); };
+    assert.ok((await names()).includes('call_service') && !(await names()).includes('delete_automation'));
+    assert.ok((await req(port, 'POST', '/api/access', { local: 'full' })).j.ok);
+    assert.ok((await names()).includes('restart_home_assistant'), 'Full on your network');
+    assert.ok(!(await req(port, 'POST', '/api/access', { outsideMax: 'full' })).j.ok, 'Full is never allowed from outside');
+    assert.ok(!(await req(port, 'POST', '/api/access', { local: 'god' })).j.ok);
+    assert.ok((await req(port, 'POST', '/api/access', { local: 'read' })).j.ok);
+    assert.ok(!(await names()).includes('save_automation'));
+    a = (await req(port, 'GET', '/api/state')).j.access;
+    assert.ok(!a.edit && a.local === 'read');
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).access;
+    assert.ok(!('edit' in saved) && saved.local === 'read', 'old switches are gone from the saved settings');
+  } finally { proc.kill(); }
+});
+
 test('server: an unanswered change is reverted when its time runs out', async () => {
   const f = await fakeHa();
   const port = await freePort(), dir = tmp('rev2');
