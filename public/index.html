@@ -916,8 +916,8 @@
     $('#reviews').innerHTML = list.map(function (r) {
       var a = ACT[r.action] || [r.action, ''];
       var auto = r.autoAt ? '<span class="tm">' + (s.review.ifNoAnswer === 'revert' ? 'Reverts' : 'Kept') + ' automatically in <b data-until="' + Number(r.autoAt) + '">' + left(r.autoAt - Date.now()) + '</b></span>' : '<span class="tm">waiting for you</span>';
-      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : 'an automation') + ': ' + esc(r.alias) + ' <span class="chip ' + a[1] + '">' + esc(a[0]) + '</span>' + auto + '</div>' +
-        '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + ' · the old version is backed up</div>' +
+      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : a[0]) + '</span>' + auto + '</div>' +
+        '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + (r.kind === 'organize' ? '' : ' · the old version is backed up') + '</div>' +
         (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(r.before ? yamlLines(r.before) : [], r.after ? yamlLines(r.after) : []) + '</div>' : '') +
         '<div class="af"><button data-rvshow="' + r.rid + '">' + (rvOpen[r.rid] ? 'Hide changes' : 'Show changes') + '</button><span class="sp"></span>' +
         '<button class="danger" data-rvrevert="' + r.rid + '">Revert</button><button class="on" data-rvkeep="' + r.rid + '">Keep</button></div></div>';
@@ -927,7 +927,7 @@
     $$('[data-rvrevert]').forEach(function (b) {
       b.onclick = function () {
         var r = list.filter(function (x) { return x.rid === b.dataset.rvrevert; })[0];
-        var what = r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
+        var what = r.kind === 'organize' ? (r.action === 'created' ? 'removes what Claude created' : 'puts the labels and categories back the way they were') : r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
         confirmBox('Revert ' + r.alias + '?', '<p>This ' + what + '. Home Assistant reloads it right away. The current version is backed up first.</p>', 'Revert', true).then(function (y) {
           if (!y) return;
           api('api/review', { rid: r.rid, keep: false }).then(function (j) { report(j, 'Could not revert'); if (j.ok) toast('Reverted', true); });

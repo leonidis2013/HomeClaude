@@ -10,7 +10,8 @@ Ideas that are planned but not built yet, with what is known about them.
 
 - `tools/list` is filtered per connection (`lib/tools.js` `list(access)`), and `tools/call` re-checks permission on every call. So a tool that was switched off is already refused at once ("not allowed for this connection"); the only gap is that a session does not *see* newly allowed tools, and keeps seeing removed ones, until it re-lists.
 - HomeClaude advertises `capabilities.tools.listChanged: false` (`lib/mcp.js`).
-- Every list result carries `ttlMs: 30000` and `cacheScope: "private"`. Clients on the 2026-07-28 protocol re-fetch the list once that expires, so they already catch up within about 30 seconds.
+- `tools/list` carries `ttlMs: 5000` (other lists 30000) and `cacheScope: "private"`. Clients on the 2026-07-28 protocol re-fetch the tool list once that expires, so they catch up within about 5 seconds.
+- Since 0.8.0, HomeClaude remembers the tool names each connection last listed. When its allowed tools differ, the next tool result starts with a one-time note naming what was added and removed and asking the person to reconnect the connector. This covers apps that ignore `ttlMs`.
 
 **Why it is not a one-line change**
 
@@ -21,7 +22,7 @@ HomeClaude answers each request with plain JSON: no `Mcp-Session-Id`, no event s
 
 **Plan**
 
-1. Keep `ttlMs`, and consider lowering it for `tools/list` only.
+1. ~~Keep `ttlMs`, and lower it for `tools/list` only.~~ Done in 0.8.0 (5 s), along with the in-band note.
 2. Add optional sessions for handshake clients: issue `Mcp-Session-Id`, support `GET /mcp` (SSE) and `DELETE /mcp`, then set `listChanged: true` in the `initialize` result (and only there).
 3. One place that fires on every permission change (`setAccess`, `setSecurity`, `oauth.setScope`, `oauth.setSpan`, revocation, expiry) and sends `notifications/tools/list_changed` to the open streams the change affects (all of them for global changes, only that connection's for per-connection ones).
 4. Revoking a connection or ending its access time also closes its streams.

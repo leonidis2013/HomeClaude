@@ -206,11 +206,13 @@ function recordChange(info, who) {
   let r = state.reviews.find((x) => x.status === 'waiting' && x.kind === info.kind && x.id === String(info.id));
   if (!r) {
     r = { rid: crypto.randomBytes(6).toString('hex'), kind: info.kind, id: String(info.id), before: clone(info.before), backup: info.backup || null, at: now, status: 'waiting', changes: 0 };
+    // labels and categories: undone by the recorded steps of the first change
+    if (info.revert) { r.revert = clone(info.revert); r.firstAction = info.action; }
     state.reviews.unshift(r);
   }
-  r.alias = String(info.alias || r.alias || r.id).slice(0, 120);
+  r.alias = String(info.alias || r.alias || r.id).slice(0, 160);
   r.after = clone(info.after); r.who = who && who.remote ? who.label : 'Claude'; r.where = who && who.remote ? 'outside' : 'home'; r.updatedAt = now; r.changes++;
-  r.action = r.before ? (r.after ? 'changed' : 'deleted') : (r.after ? 'created' : null);
+  r.action = r.revert ? r.firstAction : r.before ? (r.after ? 'changed' : 'deleted') : (r.after ? 'created' : null);
   if (!r.action) { r.status = 'withdrawn'; r.decidedAt = now; } // made and deleted again: nothing left to review
   r.autoAt = cfg.review.timeoutMin ? now + cfg.review.timeoutMin * 60e3 : null;
   trimReviews(); saveState(); broadcastSoon();
@@ -233,7 +235,10 @@ function reviewInfo() {
 async function decideReview(rid, keep, by) {
   const r = state.reviews.find((x) => x.rid === rid);
   if (!r || r.status !== 'waiting') return { ok: false, error: 'That change was already answered' };
-  if (!keep) {
+  if (!keep && r.revert) {
+    try { for (const m of r.revert) await ha.command(m); }
+    catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }
+  } else if (!keep) {
     try {
       let current = null;
       try { current = await ha.rest('GET', '/api/config/' + r.kind + '/config/' + encodeURIComponent(r.id)); } catch (e) { if (e.status !== 404) throw e; }
@@ -315,15 +320,41 @@ function argSummary(a) {
 /** A connection from outside: the level it was given, under the outside ceiling, never delete or restart. */
 const capAccess = (scope) => accessFor(scope, true);
 const callLimit = Net.limiter({ max: 120, windowMs: 60e3, lockMs: 60e3 });
+
+/*
+ * Claude's apps keep the tool list they loaded. When permissions change, the next answer to that
+ * connection says so, once, so Claude can tell the person to reconnect instead of thinking it cannot do something.
+ */
+const listed = new Map(); // who.key -> { names: Set, told: string }
+const LVL_TEXT = { read: 'Look only', build: 'Help build', hands: 'Hands on', full: 'Full' };
+function noteListed(who, names) { if (who && who.key) listed.set(who.key, { names: new Set(names), told: '' }); }
+function toolsNotice(who) {
+  const seen = who && who.key && listed.get(who.key);
+  if (!seen) return '';
+  const now = tools.list(who.access).map((t) => t.name);
+  const added = now.filter((n) => !seen.names.has(n)), removed = [...seen.names].filter((n) => !now.includes(n));
+  if (!added.length && !removed.length) return '';
+  const sig = added.join(',') + '|' + removed.join(',');
+  if (seen.told === sig) return '';
+  seen.told = sig;
+  const level = (who.access && who.access.level) || cfg.access.local;
+  return '[HomeClaude: this connection\'s permissions changed since your tool list was loaded. It is now ' + (LVL_TEXT[level] || level) + '.' +
+    (added.length ? ' Now allowed, but not in your current tool list: ' + added.join(', ') + '.' : '') +
+    (removed.length ? ' No longer allowed: ' + removed.join(', ') + '.' : '') +
+    (added.length ? ' To use the new tools, the person needs to reload the HomeClaude connector (reconnect it, or start a new chat). Tell them so if they ask for something these tools do.' : '') + ']\n\n';
+}
 const mcp = Mcp.create({
   serverInfo: { name: 'homeclaude', title: 'HomeClaude (Home Assistant)', version: pkg.version },
   instructions: Tools.INSTRUCTIONS,
   listTools: (who) => tools.list(who && who.access),
+  onListed: noteListed,
   async callTool(name, a, who) {
     const t0 = Date.now(), def = tools.all().find((x) => x.name === name);
     if (who && who.remote && callLimit.locked(who.key)) return { isError: true, text: 'Too many requests from this connection. Wait a minute.' };
     if (who && who.remote) callLimit.hit(who.key);
     const r = await tools.call(name, a, who && who.access, who);
+    const notice = toolsNotice(who);
+    if (notice) r.text = notice + r.text;
     if (def && def.needs) backupsChanged();
     logActivity({ t: t0, tool: name, args: argSummary(a), ok: !r.isError, ms: Date.now() - t0, write: !!(def && def.needs), error: r.isError ? r.text.slice(0, 300) : undefined, who: who ? who.label : undefined, remote: !!(who && who.remote), ip: who ? who.ip : undefined });
     return r;

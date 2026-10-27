@@ -639,6 +639,75 @@ test('server: one set of permission levels, with the outside limit', async () =>
   } finally { proc.kill(); }
 });
 
+test('tools: labels and categories', async () => {
+  const seen = [];
+  const { t, ha } = toolsWith({ edit: true });
+  t.ctx.onChange = null;
+  const W = ha.world.w;
+  assert.strictEqual(parse(await t.call('list_labels', {}))[0].entities, 1);
+  const la = parse(await t.call('list_automations', {})).automations.find((x) => x.entity_id === 'automation.porch_light_at_sunset');
+  assert.deepStrictEqual([la.category, la.labels], ['Lights', ['Outdoor']], 'automations show their category and labels');
+  assert.ok(parse(await t.call('save_label', { name: 'Kitchen', color: 'amber' })).created);
+  assert.ok((await t.call('save_label', { name: 'kitchen' })).isError, 'no duplicate names');
+  assert.strictEqual(parse(await t.call('set_labels', { entity_ids: ['light.kitchen'], device_ids: ['d2'], area_ids: ['Kitchen'], add: ['Kitchen'] })).changed, 3);
+  assert.deepStrictEqual(W.reg.find((e) => e.entity_id === 'light.kitchen').labels, ['kitchen']);
+  assert.deepStrictEqual(W.devices.find((d) => d.id === 'd2').labels, ['kitchen']);
+  assert.deepStrictEqual(W.areas.find((x) => x.area_id === 'kitchen').labels, ['kitchen']);
+  assert.strictEqual(parse(await t.call('set_labels', { entity_ids: ['light.kitchen'], add: ['Kitchen'] })).changed, 0, 'already there');
+  await t.call('set_labels', { entity_ids: ['automation.porch_light_at_sunset'], add: ['kitchen'] });
+  assert.deepStrictEqual(W.reg.find((e) => e.entity_id === 'automation.porch_light_at_sunset').labels.sort(), ['kitchen', 'outdoor'], 'other labels left alone');
+  assert.strictEqual(parse(await t.call('search_entities', { label: 'Kitchen' })).total, 2);
+  assert.ok(parse(await t.call('save_category', { scope: 'automation', name: 'Mornings' })).created);
+  assert.strictEqual(parse(await t.call('set_category', { entity_ids: ['automation.morning_coffee'], scope: 'automation', category: 'Mornings' })).changed, 1);
+  assert.strictEqual(W.reg.find((e) => e.entity_id === 'automation.morning_coffee').categories.automation, 'c_mornings');
+  assert.ok((await t.call('set_category', { entity_ids: ['light.kitchen'], scope: 'automation', category: 'Mornings' })).isError, 'wrong scope refused');
+  await t.call('set_category', { entity_ids: ['automation.morning_coffee'], scope: 'automation', category: null });
+  assert.ok(!W.reg.find((e) => e.entity_id === 'automation.morning_coffee').categories.automation, 'taken out again');
+  const ro = toolsWith({});
+  assert.ok(!ro.t.list().some((x) => x.name === 'set_labels') && ro.t.list().some((x) => x.name === 'list_labels'), 'reading at Look only, changing from Help build');
+  void seen;
+});
+
+test('server: organizing is reviewed too, and permission changes are announced once', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('org');
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const W = f.world.w;
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const rpc = async (method, params) => (await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method, params }, auth)).j.result;
+    // Look only: the list is loaded
+    const l1 = await rpc('tools/list', {});
+    assert.strictEqual(l1.ttlMs, 5000, 'short list lifetime');
+    assert.ok(!l1.tools.some((x) => x.name === 'set_labels'));
+    let r = await rpc('tools/call', { name: 'list_labels', arguments: {} });
+    assert.ok(!/HomeClaude: this connection/.test(r.content[0].text), 'nothing to announce yet');
+    // raised to Help build: the next answer says so, once
+    await req(port, 'POST', '/api/access', { local: 'build' });
+    r = await rpc('tools/call', { name: 'list_labels', arguments: {} });
+    assert.ok(/It is now Help build/.test(r.content[0].text) && /set_labels/.test(r.content[0].text) && /reload the HomeClaude connector/.test(r.content[0].text), r.content[0].text.slice(0, 300));
+    r = await rpc('tools/call', { name: 'list_labels', arguments: {} });
+    assert.ok(!/HomeClaude: this connection/.test(r.content[0].text), 'only once');
+    // after re-listing, nothing to announce
+    await rpc('tools/list', {});
+    // organize, then revert from the page
+    await rpc('tools/call', { name: 'save_label', arguments: { name: 'Garage stuff' } });
+    await rpc('tools/call', { name: 'set_labels', arguments: { entity_ids: ['sensor.garage_freezer_temperature'], add: ['Garage stuff'] } });
+    const rv = (await req(port, 'GET', '/api/state')).j.reviews.filter((x) => x.status === 'waiting');
+    assert.strictEqual(rv.length, 2);
+    assert.ok(rv.every((x) => x.kind === 'organize'));
+    const assign = rv.find((x) => /Labels on/.test(x.alias)), made = rv.find((x) => x.action === 'created');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: assign.rid, keep: false })).j.ok);
+    assert.deepStrictEqual(W.reg.find((e) => e.entity_id === 'sensor.garage_freezer_temperature').labels, [], 'label taken off again');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: made.rid, keep: false })).j.ok);
+    assert.ok(!W.labels.some((x) => x.name === 'Garage stuff'), 'new label removed again');
+  } finally { proc.kill(); await f.close(); }
+});
+
 test('server: an unanswered change is reverted when its time runs out', async () => {
   const f = await fakeHa();
   const port = await freePort(), dir = tmp('rev2');
