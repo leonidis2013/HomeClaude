@@ -22,15 +22,18 @@ const Backups = require('./lib/backups.js');
 const Guard = require('./lib/guard.js');
 const Mcp = require('./lib/mcp.js');
 const Tools = require('./lib/tools.js');
+const Health = require('./lib/health.js');
 const pkg = require('./package.json');
 
 const args = process.argv.slice(2);
 const DEMO = args.includes('--demo');
+let lastWriteError = null;
 const cfgPath = process.env.CONFIG || path.join(__dirname, 'data', 'config.json');
 const dataDir = path.dirname(path.resolve(cfgPath));
 const statePath = path.join(dataDir, 'state.json');
 const PORT = Number(process.env.PORT || 8080);
 const DEMO_TOKEN = 'demo';
+const IN_DOCKER = fs.existsSync('/.dockerenv');
 
 // ---------- config (saved from the web page) ----------
 const DEFAULTS = {
@@ -44,7 +47,16 @@ const DEFAULTS = {
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-  catch (e) { if (e.code === 'ENOENT') return fallback; console.error(file + ' could not be read: ' + e.message); process.exit(1); }
+  catch (e) {
+    if (e.code === 'ENOENT') return fallback;
+    // storage problems: start anyway so the page can show what is wrong (instead of a silent restart loop)
+    if (['EACCES', 'EPERM', 'ENOTDIR', 'EIO', 'ESTALE', 'ENOTCONN', 'EHOSTDOWN'].includes(e.code)) {
+      console.error(file + ' could not be read (' + e.code + '). Starting with defaults; see System on the page.');
+      lastWriteError = { at: Date.now(), message: 'could not read ' + path.basename(file) + ' (' + e.code + ')' };
+      return fallback;
+    }
+    console.error(file + ' could not be read: ' + e.message); process.exit(1);
+  }
 }
 function writeJson(file, obj) {
   const text = JSON.stringify(obj, null, 2) + '\n';
@@ -69,7 +81,9 @@ function changeConfig(mutator) {
     if (err) return { ok: false, error: err };
     if (!DEMO) writeJson(cfgPath, next);
   } catch (e) {
-    return { ok: false, status: 500, error: 'Could not save the settings (' + (e.code || e.message) + '). Is ' + dataDir + ' writable?' };
+    lastWriteError = { at: Date.now(), message: e.code || e.message };
+    setTimeout(runHealth, 10);
+    return { ok: false, status: 500, error: 'Could not save the settings (' + (e.code || e.message) + '). See System on the dashboard.' };
   }
   cfg = next;
   return { ok: true };
@@ -81,7 +95,10 @@ let saveTimer = null;
 function saveState() {
   if (DEMO) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { try { writeJson(statePath, state); } catch (e) { console.error('Could not save state: ' + e.message); } }, 300);
+  saveTimer = setTimeout(() => {
+    try { writeJson(statePath, state); }
+    catch (e) { console.error('Could not save state: ' + e.message); lastWriteError = { at: Date.now(), message: e.code || e.message }; runHealth(); }
+  }, 300);
 }
 
 // ---------- secrets: the Home Assistant token and Claude's access token ----------
@@ -142,6 +159,22 @@ async function checkHa() {
   }
   broadcastSoon();
   return haStatus;
+}
+
+// ---------- is HomeClaude itself healthy (storage, free space, memory, load) ----------
+let health = null, healthRunning = false;
+async function runHealth() {
+  if (healthRunning) return health;
+  healthRunning = true;
+  try {
+    const before = health && health.level;
+    health = await Health.check({ dataDir, inDocker: IN_DOCKER && !DEMO, lastWriteError });
+    if (health.storage.writable) lastWriteError = null;
+    if (health.level !== 'ok' && health.level !== before) console.error('Health: ' + [health.storage, health.memory, health.load].flatMap((x) => x.problems).join(' '));
+  } catch (e) { console.error('Health check failed: ' + e.message); }
+  healthRunning = false;
+  broadcastSoon();
+  return health;
 }
 
 // ---------- the MCP endpoint ----------
@@ -300,6 +333,7 @@ function snapshot() {
     activityTotal: state.activity.length,
     lastCallAt: state.lastCallAt || 0,
     pinRequired: pinSet(),
+    health,
     setup: cfg.setup,
     everConnected: !!(state.lastCallAt || state.activity.length),
     update: { latest: upd.latest, available: !!upd.latest && newer(upd.latest, pkg.version), checkedAt: upd.checkedAt, failed: upd.failed, enabled: UPDATE_CHECK && !DEMO, image: IMAGE + ':' + upd.latest }
@@ -419,6 +453,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/token') return postJson(req, res, (b) => (b.regenerate ? newToken() : { ok: true, token: mcpToken() }));
   if (req.method === 'POST' && url === '/api/settings') return postJson(req, res, changeSettings);
   if (req.method === 'POST' && url === '/api/restore') return postJson(req, res, (b) => (DEMO ? { ok: false, error: 'Demo mode has no backups' } : restore(b)));
+  if (req.method === 'POST' && url === '/api/health-check') return postJson(req, res, () => runHealth().then((h) => ({ ok: !!h })), { needPin: false });
   if (req.method === 'POST' && url === '/api/setup') return postJson(req, res, setupAction);
   if (req.method === 'POST' && url === '/api/activity-clear') return postJson(req, res, () => { state.activity = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/update-check') {
@@ -435,6 +470,7 @@ function start() {
   mcpToken();
   if (!DEMO && UPDATE_CHECK) { setTimeout(checkSelfUpdate, 5000).unref(); setInterval(checkSelfUpdate, 6 * 3600 * 1000).unref(); }
   setTimeout(checkHa, DEMO ? 200 : 1000).unref();
+  runHealth(); setInterval(runHealth, 60000).unref();
   setInterval(checkHa, 60000).unref();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('HomeClaude v' + pkg.version + ' on http://localhost:' + PORT + (DEMO ? ' (demo: simulated Home Assistant, access token "demo")' : ''));

@@ -215,6 +215,30 @@ test('tools: big answers are cut to size', () => {
   assert.ok(text.length < 61000 && /cut:/.test(text));
 });
 
+// ---------- health ----------
+test('health: storage, mounts and memory', async () => {
+  const Health = R('lib/health');
+  const ok = await Health.checkStorage(tmp('h'));
+  assert.ok(ok.writable && ok.level !== 'bad' && ok.free, JSON.stringify(ok));
+  const file = path.join(tmp('h2'), 'not-a-folder'); fs.writeFileSync(file, 'x');
+  const bad = await Health.checkStorage(path.join(file, 'data'));
+  assert.ok(!bad.writable && bad.level === 'bad' && bad.problems.length, JSON.stringify(bad));
+  const mi = [
+    '20 1 0:30 / / rw,relatime - overlay overlay rw',
+    '21 20 0:40 / /data rw,relatime - nfs4 10.0.0.5:/mnt/Ulicki/x rw',
+    '22 20 0:41 / /ro rw,relatime - zfs Ulicki/y ro'
+  ].join('\n');
+  const m = Health.mountFor('/data', mi);
+  assert.strictEqual(m.fsType, 'nfs4');
+  assert.strictEqual(Health.describeMount(m, '/data').kind, 'network');
+  assert.strictEqual(Health.describeMount(Health.mountFor('/app/data', mi), '/app/data').kind, 'container');
+  assert.ok(Health.mountFor('/ro/z', mi).readOnly);
+  const mem = Health.checkMemory({ cgroupRoot: tmp('cg') });
+  assert.ok(mem.used > 0 && mem.level);
+  const cg = tmp('cg2'); fs.writeFileSync(cg + '/memory.max', String(100 * 1024 * 1024)); fs.writeFileSync(cg + '/memory.current', String(97 * 1024 * 1024));
+  assert.strictEqual(Health.checkMemory({ cgroupRoot: cg }).level, 'bad');
+});
+
 // ---------- the real Home Assistant client over HTTP + WebSocket ----------
 test('ha client: REST and WebSocket against a fake Home Assistant', async () => {
   const f = await fakeHa();
@@ -320,6 +344,8 @@ test('server: token, origin, access switch, PIN, live Home Assistant settings', 
     assert.strictEqual((await req(port, 'POST', '/mcp', init, auth)).status, 401);
     assert.strictEqual((await req(port, 'POST', '/mcp', init, { authorization: 'Bearer ' + tok2 })).status, 200);
     // the page itself
+    const hs = (await req(port, 'GET', '/api/state')).j.health;
+    assert.ok(hs && hs.storage.writable, 'health is reported');
     const page = await req(port, 'GET', '/');
     assert.ok(page.status === 200 && /<title>HomeClaude<\/title>/.test(page.text));
   } finally {

@@ -1,17 +1,20 @@
 # TrueNAS SCALE: Apps > Discover Apps > Custom App > "Install via YAML", paste this.
-# The container runs as uid 1000 (node): give that user write access to the dataset
-# (ACL entry for user 1000, or chown 1000:1000).
-# Change the host path to a dataset of yours, and the host port if 9085 is taken.
-# pull_policy: always fetches the newest image each time the app starts or is updated.
+# Settings, the encrypted tokens and backups are kept in the homeclaude-data volume,
+# which TrueNAS manages, like LiveMic's: no dataset or permissions to set up.
+# Change the host port if 9085 is taken.
+# pull_policy: always fetches the newest image each time the app is saved or redeployed.
 services:
   homeclaude:
+    container_name: homeclaude
     image: ghcr.io/leonidis2013/homeclaude:latest
     pull_policy: always
-    container_name: homeclaude
     restart: unless-stopped
     ports:
-      - "9085:8080"
-    volumes:
-      - /mnt/tank/apps/homeclaude:/data
+      - '9085:8080'
     environment:
       TZ: America/Chicago
+    volumes:
+      - homeclaude-data:/data
+
+volumes:
+  homeclaude-data:

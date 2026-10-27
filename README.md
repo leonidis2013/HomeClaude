@@ -7,6 +7,7 @@ A bridge between Claude and your Home Assistant, for building and troubleshootin
 - **Blocked domains** (default `lock`, `alarm_control_panel`, `cover`): Claude can read them, but HomeClaude refuses any service call in those domains or aimed at their entities, and refuses to save automations or scripts whose actions would do that. These checks run in HomeClaude, so they hold whatever Claude asks for.
 - **Backups before every change.** Before Claude changes or deletes an automation or script, the old version is saved. **Restore** puts it back from the Backups page.
 - **Activity list** of every request Claude made, with errors, and changes marked.
+- **System health:** the dashboard checks that HomeClaude can actually save (it writes, reads back and deletes a test file, with a time limit, so a hung or read-only network share is caught), free space, whether `/data` is really on a volume, and the container's memory and load. Problems show on the dashboard, in the header and in the setup guide, in plain words.
 - **Off switch** for Claude access on the dashboard, an access token you can replace any time, and an optional control PIN for the page.
 
 ## Run it
@@ -17,7 +18,7 @@ Docker / Docker Compose:
 docker compose up -d
 ```
 
-TrueNAS SCALE: Apps > Discover Apps > Custom App > **Install via YAML**, paste `truenas-app.yaml`, set the dataset path, and give uid 1000 write access to it. It uses the `latest` image with `pull_policy: always`, so it gets the newest version whenever the app restarts. Images are built for amd64 and arm64 by the GitHub workflow (`ghcr.io/leonidis2013/homeclaude`).
+TrueNAS SCALE: Apps > Discover Apps > Custom App > **Install via YAML**, paste `truenas-app.yaml`. Its data goes in a volume TrueNAS manages (`homeclaude-data`), like LiveMic's, so there is no dataset or permission to set up. To keep it on a dataset of yours instead, map that path to `/data` and give uid 1000 write access. It uses the `latest` image with `pull_policy: always`, so it gets the newest version whenever the app restarts. Images are built for amd64 and arm64 by the GitHub workflow (`ghcr.io/leonidis2013/homeclaude`).
 
 Without Docker: `node server.js` (Node 22+, no npm packages). `node server.js --demo` runs against a pretend Home Assistant, with the access token `demo`.
 
@@ -71,7 +72,7 @@ Exposing it to the internet means the token is all that protects it: keep the pe
 
 ## Testing status
 
-`npm test` runs 12 tests: the blocking rules, the MCP protocol, every tool against a pretend Home Assistant (including backups, pruning, refusals and the restart check), the real Home Assistant client over HTTP and WebSocket against a fake Home Assistant server (including a refused token and an unreachable host), and the whole server over HTTP (token, Origin check, off switch, PIN, saving and restoring an automation, new token). Connecting with the official MCP Python SDK client works in both the 2026-07-28 and the older handshake mode. The page was checked in a browser in demo mode, on desktop and phone sizes.
+`npm test` runs 13 tests: the health checks (storage, mounts, memory), the blocking rules, the MCP protocol, every tool against a pretend Home Assistant (including backups, pruning, refusals and the restart check), the real Home Assistant client over HTTP and WebSocket against a fake Home Assistant server (including a refused token and an unreachable host), and the whole server over HTTP (token, Origin check, off switch, PIN, saving and restoring an automation, new token). Connecting with the official MCP Python SDK client works in both the 2026-07-28 and the older handshake mode. The page was checked in a browser in demo mode, on desktop and phone sizes.
 
 **Not tested against a real Home Assistant.** The API calls follow Home Assistant's documented REST and WebSocket APIs, but a real instance, with its own versions and data, could not be used where this was written. Expect some first-run fixes; please report what you find.
 

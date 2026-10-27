@@ -205,7 +205,8 @@
 
   /* ===== HomeClaude additions ===== */
   :root { --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  #tab-main .devs { grid-template-columns:repeat(2, minmax(0, 1fr)); max-width:1240px; }
+  #tab-main .devs { grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); max-width:1500px; }
+  .rv .warn2 { color:var(--warn); font-weight:600; }
   @media (max-width:720px) { #tab-main .devs { grid-template-columns:1fr; } }
   .dev.wide { grid-column:1/-1; }
   .chip.w { background:color-mix(in srgb, var(--warn) 16%, transparent); color:var(--warn); }
@@ -315,6 +316,12 @@
       <div class="dsub" id="accSub"></div>
       <div class="rows" id="accRows"></div>
       <div class="df"><span class="when" id="accWhen"></span><button id="permBtn">Permissions</button><button id="connBtn" class="on">Connect Claude</button></div>
+    </div>
+    <div class="dev none" id="sysCard">
+      <div class="dh"><span class="dot" id="sysDot"></span><div class="dn">System</div></div>
+      <div class="dsub" id="sysSub"></div>
+      <div class="rows" id="sysRows"></div>
+      <div class="df"><span class="when" id="sysWhen"></span><button id="sysTest">Check now</button></div>
     </div>
     <div class="dev wide none" id="actCard">
       <div class="dh"><span class="dot acc"></span><div class="dn">Recent activity</div><button class="link" id="actAll">All activity</button></div>
@@ -616,10 +623,31 @@
     out.push('<span class="st ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"><span class="dot ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"></span>Claude: ' + esc(mt) + '</span>');
     if (s.lastCallAt) out.push('<span class="st"><span class="dot acc"></span>Last request ' + esc(ago(s.lastCallAt)) + '</span>');
     if (s.update && s.update.available) out.push('<span class="st warn">Update ' + esc(s.update.latest) + ' available</span>');
+    var h = s.health;
+    if (h && h.level === 'bad') out.push('<span class="st bad"><span class="dot bad"></span>' + (h.storage.level === 'bad' ? 'Storage problem' : 'System problem') + '</span>');
+    else if (h && h.level === 'warn') out.push('<span class="st warn"><span class="dot warn"></span>System warning</span>');
     if (s.demo) out.push('<span class="st">Demo</span>');
     $('#status').innerHTML = out.join('');
     $('#chkAll').classList.toggle('spin', !!st.checking);
   }
+
+  function lvlCls(l) { return l === 'bad' ? 'bad' : l === 'warn' ? 'warn2' : 'good'; }
+  function renderSystem(h) {
+    if (!h) { $('#sysRows').innerHTML = row('Status', 'Checking…'); return; }
+    var st = h.storage, m = h.memory, ld = h.load;
+    $('#sysCard').className = 'dev ' + (h.level === 'bad' ? 'off' : h.level === 'warn' ? 'upd' : '');
+    $('#sysDot').className = 'dot ' + (h.level === 'bad' ? 'bad' : h.level === 'warn' ? 'warn' : 'ok');
+    $('#sysSub').textContent = h.level === 'ok' ? 'Saving works, resources are fine' : h.level === 'warn' ? 'Works, with a warning' : 'Needs attention';
+    var probs = function (x) { return x.problems && x.problems.length ? '<small>' + esc(x.problems.join(' ')) + '</small>' : ''; };
+    var r = row('Storage', '<span class="' + lvlCls(st.level) + '">' + (st.writable ? 'Saving works' : 'Cannot save') + (st.writable && st.latencyMs != null ? ' · ' + esc(st.latencyMs) + ' ms' : '') + '</span>' + probs(st));
+    r += row('Where', esc(st.where || st.path) + (st.kind === 'network' ? ' <span class="chip w">network</span>' : ''));
+    if (st.free) r += row('Free', esc(st.free));
+    r += row('Memory', '<span class="' + lvlCls(m.level) + '">' + esc(m.text) + '</span>' + probs(m));
+    r += row('Load', '<span class="' + lvlCls(ld.level) + '">' + esc(ld.text) + '</span>' + probs(ld));
+    $('#sysRows').innerHTML = r;
+    $('#sysWhen').textContent = 'Checked ' + ago(h.checkedAt);
+  }
+  $('#sysTest').onclick = function () { var b = this; b.disabled = true; api('api/health-check', {}).then(function () { b.disabled = false; toast('Checked', true); }); };
 
   function renderMain(s) {
     var st = s.ha.status || {}, a = s.access;
@@ -628,6 +656,7 @@
     if (!st.configured || !(s.setup && s.setup.completed)) al.push('<div class="errbox">' + (st.configured ? 'Setup is not finished yet.' : 'Home Assistant is not set up yet.') + ' <button id="alSetup" class="on">Open the setup guide</button></div>');
     else if (!st.ok && st.error) al.push('<div class="errbox">' + esc(st.error) + '</div>');
     if (!a.enabled) al.push('<div class="errbox">Claude access is off: every request is refused.</div>');
+    if (s.health && s.health.storage.level === 'bad') al.push('<div class="errbox"><b>HomeClaude cannot save.</b> ' + esc(s.health.storage.problems.join(' ')) + '</div>');
     $('#alerts').innerHTML = al.join('');
     var as = $('#alSetup'); if (as) as.onclick = function () { openWizard(); };
 
@@ -663,6 +692,7 @@
 
     // activity
     $('#actList').innerHTML = actRows(s.activity || [], 12);
+    renderSystem(s.health);
   }
 
   function updateSettings(s) {
@@ -835,7 +865,9 @@
   function stepState(id, s) {
     var m = marks(s), st = s.ha.status || {};
     switch (id) {
-      case 'welcome': return m.welcome || haGood(s) ? ['done', 'Read'] : ['todo', 'Start here'];
+      case 'welcome':
+        if (s.health && s.health.storage.level === 'bad') return ['bad', 'Cannot save settings'];
+        return m.welcome || haGood(s) ? ['done', 'Read'] : ['todo', 'Start here'];
       case 'user': return m.user || haGood(s) ? ['done', 'Made'] : ['todo', 'In Home Assistant'];
       case 'token': return m.token || haGood(s) ? ['done', 'Made'] : ['todo', 'In Home Assistant'];
       case 'connect':
@@ -907,6 +939,15 @@
   // the parts of a step that change while it is open (no redraw, so typing is not lost)
   function wizardLive(s) {
     var id = WZ[wzStep].id, st = s.ha.status || {};
+    if (id === 'welcome' && $('#wzStore')) {
+      var hs = s.health && s.health.storage, nb = $('#wzNext');
+      $('#wzStore').innerHTML = !hs ? '<div class="waitbox"><span class="spin"></span>Checking where HomeClaude saves its settings…</div>'
+        : hs.level === 'bad' ? '<div class="errbox"><b>HomeClaude cannot save its settings yet.</b> ' + esc(hs.problems.join(' ')) + ' Fix this first, then press <b>Check again</b>. <button class="link" id="wzStoreRe">Check again</button></div>'
+        : hs.level === 'warn' ? '<div class="errbox" style="border-color:var(--warn);background:color-mix(in srgb, var(--warn) 10%, transparent)"><b>Warning:</b> ' + esc(hs.problems.join(' ')) + '</div>'
+        : '<div class="okbox">Settings are saved to ' + esc(hs.where) + (hs.free ? ', ' + esc(hs.free) + ' free' : '') + '. They survive restarts and updates.</div>';
+      var re = $('#wzStoreRe'); if (re) re.onclick = function () { api('api/health-check', {}); };
+      if (nb) nb.disabled = !!(hs && hs.level === 'bad');
+    }
     if (id === 'connect') {
       var box = $('#wzConn'), nx = $('#wzNext');
       if (!box) return;
@@ -943,6 +984,7 @@
       pane.innerHTML = head('Let\'s connect Claude to your Home Assistant') +
         '<div class="wzbody"><p>HomeClaude lets Claude look inside Home Assistant to help you build automations and find out why something did not work. It takes about five minutes.</p>' +
         '<p>You will need to log in to Home Assistant as an <b>administrator</b>, in another tab.</p>' +
+        '<div id="wzStore"></div>' +
         '<ol class="steps"><li><b>Make a user for Claude</b> in Home Assistant, and a token for it</li><li><b>Connect HomeClaude</b> to Home Assistant with that token</li><li><b>Choose what Claude may change.</b> To start with, it can only look</li><li><b>Connect Claude</b> and ask it a first question</li></ol></div>' +
         foot('Start');
       wire(function () { return mark('welcome'); });
