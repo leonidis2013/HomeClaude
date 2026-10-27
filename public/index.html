@@ -261,6 +261,27 @@
   .chk.ok .ck { background:var(--ok); color:var(--onacc); } .chk.bad .ck { background:var(--bad); color:#fff; }
   .chk span small { display:block; color:var(--dim); font-size:12px; }
   .ev .dot { margin-top:2px; }
+  #reviews:empty { display:none; }
+  #reviews { display:flex; flex-direction:column; gap:10px; margin-bottom:14px; }
+  .rev { background:var(--card); border:1px solid color-mix(in srgb, var(--acc) 60%, var(--line)); border-left:4px solid var(--acc); border-radius:12px; padding:14px; max-width:900px; }
+  .rev .ah { display:flex; gap:8px; align-items:center; font-weight:700; flex-wrap:wrap; }
+  .rev .ah .tm { margin-left:auto; font-weight:400; font-size:12px; color:var(--dim); }
+  .rev .ah .tm b { font-variant-numeric:tabular-nums; color:var(--fg); }
+  .rev .sub { font-size:13px; color:var(--dim); margin:4px 0 10px; }
+  .rev .af { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .rev .af .sp { flex:1; }
+  .chip.acc { background:color-mix(in srgb, var(--acc) 18%, transparent); color:var(--acc); }
+  .diff { margin:10px 0; background:var(--inset); border-radius:8px; padding:8px 0; font:12px/1.5 var(--mono); max-height:360px; overflow:auto; }
+  .diff div { padding:0 10px 0 26px; white-space:pre-wrap; overflow-wrap:anywhere; position:relative; }
+  .diff div::before { position:absolute; left:10px; color:var(--faint); }
+  .diff .a { background:color-mix(in srgb, var(--ok) 14%, transparent); } .diff .a::before { content:"+"; color:var(--ok); }
+  .diff .d { background:color-mix(in srgb, var(--bad) 14%, transparent); text-decoration:line-through; text-decoration-color:color-mix(in srgb, var(--bad) 50%, transparent); } .diff .d::before { content:"−"; color:var(--bad); }
+  .diff .gap { color:var(--faint); font-style:italic; }
+  .rhist { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line); font-size:13px; }
+  .rhist:first-child { border-top:0; } .rhist span { flex:1; min-width:0; } .rhist small { color:var(--dim); }
+  .urgent { color:var(--bad); }
+  .appr .tm b { font-variant-numeric:tabular-nums; color:var(--fg); }
+  .appr .af select, .cspan select { max-width:150px; }
+  .acc-left { display:block; margin-top:2px; } .acc-left b { font-variant-numeric:tabular-nums; }
   .qrwrap { display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap; margin:6px 0 4px; }
   .qrwrap .qr { background:#fff; padding:6px; border-radius:10px; line-height:0; flex:none; }
   .qrwrap .qr svg { width:220px; height:220px; }
@@ -336,6 +357,7 @@
 
 <div id="app">
 <div id="approvals"></div>
+<div id="reviews"></div>
 <section id="tab-main">
   <div id="alerts"></div>
   <div class="devs">
@@ -386,7 +408,9 @@
         <div id="secTestOut"></div>
       </div>
       <div class="card"><h2>Reverse proxy</h2><div id="secProxy"></div></div>
-      <div class="card"><h2>Connections from outside</h2><div id="secConns"></div>
+      <div class="card"><h2>Connections from outside</h2>
+        <div class="set first"><div class="sl"><b>Access time for new connections</b><span>Preselected when you approve (you can change it each time), and used for approvals with an authenticator code. When it runs out, Claude has to sign in and be approved again</span></div><div class="sc"><select id="secSpan" aria-label="Default access time"></select></div></div>
+        <div id="secConns"></div>
         <div class="set"><div class="sl"><span>Revoking cuts a connection off at once. Claude has to sign in again, and you approve it again.</span></div><div class="sc"><button id="secRevokeAll" class="danger">Revoke all</button></div></div>
       </div>
       <div class="card">
@@ -471,6 +495,11 @@
         <div class="set feat"><div class="sl"><b>Restart Home Assistant</b><span>Only after its configuration check passes</span></div><div class="sc"><div class="seg" data-perm="restart"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
       </div>
       <div class="card">
+        <h2>Review Claude's changes</h2>
+        <div class="set first"><div class="sl"><b>Ask me to keep or revert</b><span>Each change to an automation or script goes live at once, is backed up, and waits on the dashboard for Keep or Revert. Revert puts back the version from before Claude's first change</span></div><div class="sc"><div class="seg" id="rvOn"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set"><div class="sl"><b>If I don't answer within</b><span>Like a display-settings check: no answer, and the change is decided for you</span></div><div class="sc"><select id="rvTime" aria-label="Time to answer"><option value="0">No limit (wait for me)</option><option value="15">15 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">24 hours</option></select><div class="seg" id="rvWhat"><button data-v="revert">Revert it</button><button data-v="keep">Keep it</button></div></div></div>
+      </div>
+      <div class="card">
         <h2>Blocked</h2>
         <div class="set first"><div class="sl"><b>Blocked domains</b><span>Claude can read these, but cannot call their services, aim services at their entities, or save automations and scripts whose actions do. Default: lock, alarm_control_panel, cover (garage doors)</span></div><div class="sc"><input id="pBlocked" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Blocked domains"><button id="pBlockedSave" class="on">Save</button></div></div>
       </div>
@@ -486,6 +515,7 @@
     </div>
 
     <div data-pane="activity" class="hide">
+      <div class="card"><h2>Reviewed changes</h2><div id="rvHist"></div></div>
       <div class="card"><h2>Everything Claude asked for</h2><div class="note" id="actNote" style="margin-bottom:6px"></div><div class="alist" id="actFull"></div>
         <div class="set"><div class="sl"></div><div class="sc"><button id="actClear" class="danger">Clear</button></div></div>
       </div>
@@ -693,6 +723,8 @@
     if (s.lastCallAt) out.push('<span class="st"><span class="dot acc"></span>Last request ' + esc(ago(s.lastCallAt)) + '</span>');
     var sec = s.security || {};
     if (sec.mode === 'exposed') out.push('<span class="st warn"><span class="dot warn"></span>Exposed</span>');
+    var nrv = (s.reviews || []).filter(function (r) { return r.status === 'waiting'; }).length;
+    if (nrv) out.push('<span class="st" style="color:var(--acc)"><span class="dot acc"></span>' + plural(nrv, 'change') + ' to review</span>');
     if (sec.pending && sec.pending.length) out.push('<span class="st warn"><span class="dot warn"></span>' + plural(sec.pending.length, 'approval') + ' waiting</span>');
     if (s.update && s.update.available) out.push('<span class="st warn">Update ' + esc(s.update.latest) + ' available</span>');
     var h = s.health;
@@ -782,6 +814,15 @@
     fillConnect(document);
     // permissions
     paintSeg($('#pEnabled'), a.enabled ? '1' : '0');
+    paintSeg($('#rvOn'), s.review.enabled ? '1' : '0');
+    if (document.activeElement !== $('#rvTime')) $('#rvTime').value = String(s.review.timeoutMin);
+    paintSeg($('#rvWhat'), s.review.ifNoAnswer);
+    $('#rvWhat').classList.toggle('hide', !s.review.timeoutMin);
+    var done = (s.reviews || []).filter(function (r) { return r.status !== 'waiting'; });
+    $('#rvHist').innerHTML = done.length ? done.slice(0, 30).map(function (r) {
+      return '<div class="rhist"><span class="dot ' + (r.status === 'kept' ? 'ok' : r.status === 'reverted' ? 'warn' : '') + '"></span><span><b>' + esc(r.alias) + '</b> <small>' + esc(r.kind) + ' ' + esc(r.action || 'made and deleted again') + ' by ' + esc(r.who || 'Claude') + '</small></span>' +
+        '<small>' + esc(r.status === 'withdrawn' ? 'nothing left to review' : r.status + (r.by && r.by !== 'you' ? ' (' + r.by + ')' : '')) + ' · ' + esc(ago(r.decidedAt)) + '</small></div>';
+    }).join('') : '<div class="note">Nothing yet. Kept and reverted changes show up here.</div>';
     $$('[data-perm]').forEach(function (el) { paintSeg(el, a[el.dataset.perm] ? '1' : '0'); });
     if (!blkLoaded) { $('#pBlocked').value = a.blocked.join(', '); blkLoaded = true; }
     $('#toolList').innerHTML = (s.tools || []).map(function (t) {
@@ -811,32 +852,130 @@
     document.body.classList.remove('offline');
     renderHeader(s);
     renderApprovals(s);
+    renderReviews(s);
     renderSecButton(s);
     if (inWizard) renderWizard(s); else if (inSecurity) renderSecurity(s); else if (inSetup) updateSettings(s); else renderMain(s);
+  }
+
+  // ---------- keep or revert ----------
+  /** Home Assistant's own format: config as YAML lines */
+  function yamlLines(v, ind) {
+    ind = ind || '';
+    var out = [], plain = /^[A-Za-z_][\w .,/@%+()'-]*$/;
+    function sc(x) {
+      if (x === null || x === undefined) return 'null';
+      if (typeof x === 'number' || typeof x === 'boolean') return String(x);
+      if (Array.isArray(x)) return '[]';
+      if (typeof x === 'object') return '{}';
+      var t = String(x);
+      return plain.test(t) && !/^(true|false|yes|no|on|off|null)$/i.test(t) && t.trim() === t ? t : JSON.stringify(t);
+    }
+    var leaf = function (x) { return x === null || typeof x !== 'object' || (Array.isArray(x) ? !x.length : !Object.keys(x).length); };
+    if (Array.isArray(v)) v.forEach(function (it) {
+      if (leaf(it)) out.push(ind + '- ' + sc(it));
+      else { var sub = yamlLines(it, ind + '  '); sub[0] = ind + '- ' + sub[0].slice(ind.length + 2); out = out.concat(sub); }
+    });
+    else Object.keys(v || {}).forEach(function (k) {
+      var x = v[k], key = /^[\w-]+$/.test(k) ? k : JSON.stringify(k);
+      if (leaf(x)) out.push(ind + key + ': ' + sc(x));
+      else { out.push(ind + key + ':'); out = out.concat(yamlLines(x, ind + '  ')); }
+    });
+    return out;
+  }
+  /** line diff (longest common subsequence), unchanged runs folded */
+  function diffHtml(a, b) {
+    var n = a.length, m = b.length, L = [];
+    for (var i = 0; i <= n; i++) { L.push(new Array(m + 1).fill(0)); }
+    for (i = n - 1; i >= 0; i--) for (var j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    var rows = []; i = 0; j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && a[i] === b[j]) { rows.push(['s', a[i]]); i++; j++; }
+      else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) { rows.push(['a', b[j]]); j++; }
+      else { rows.push(['d', a[i]]); i++; }
+    }
+    var keep = rows.map(function (r, k) { if (r[0] !== 's') return true; for (var d = -2; d <= 2; d++) { var q = rows[k + d]; if (q && q[0] !== 's') return true; } return false; });
+    var h = '', skipped = 0;
+    rows.forEach(function (r, k) {
+      if (!keep[k]) { skipped++; return; }
+      if (skipped) { h += '<div class="gap">… ' + plural(skipped, 'line') + ' unchanged</div>'; skipped = 0; }
+      h += '<div class="' + r[0] + '">' + esc(r[1] || ' ') + '</div>';
+    });
+    if (skipped) h += '<div class="gap">… ' + plural(skipped, 'line') + ' unchanged</div>';
+    return h || '<div class="gap">No difference</div>';
+  }
+  var rvSig = '', rvOpen = {};
+  var ACT = { changed: ['changed', 'acc'], created: ['created', 'o'], deleted: ['deleted', 'b'] };
+  function renderReviews(s) {
+    var list = (s.reviews || []).filter(function (r) { return r.status === 'waiting'; });
+    var sig = JSON.stringify(list.map(function (r) { return [r.rid, r.updatedAt, r.autoAt, !!rvOpen[r.rid]]; }));
+    if (sig === rvSig) return;
+    rvSig = sig;
+    $('#reviews').innerHTML = list.map(function (r) {
+      var a = ACT[r.action] || [r.action, ''];
+      var auto = r.autoAt ? '<span class="tm">' + (s.review.ifNoAnswer === 'revert' ? 'Reverts' : 'Kept') + ' automatically in <b data-until="' + Number(r.autoAt) + '">' + left(r.autoAt - Date.now()) + '</b></span>' : '<span class="tm">waiting for you</span>';
+      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : 'an automation') + ': ' + esc(r.alias) + ' <span class="chip ' + a[1] + '">' + esc(a[0]) + '</span>' + auto + '</div>' +
+        '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + ' · the old version is backed up</div>' +
+        (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(r.before ? yamlLines(r.before) : [], r.after ? yamlLines(r.after) : []) + '</div>' : '') +
+        '<div class="af"><button data-rvshow="' + r.rid + '">' + (rvOpen[r.rid] ? 'Hide changes' : 'Show changes') + '</button><span class="sp"></span>' +
+        '<button class="danger" data-rvrevert="' + r.rid + '">Revert</button><button class="on" data-rvkeep="' + r.rid + '">Keep</button></div></div>';
+    }).join('');
+    $$('[data-rvshow]').forEach(function (b) { b.onclick = function () { rvOpen[b.dataset.rvshow] = !rvOpen[b.dataset.rvshow]; rvSig = ''; renderReviews(snap); }; });
+    $$('[data-rvkeep]').forEach(function (b) { b.onclick = function () { b.disabled = true; api('api/review', { rid: b.dataset.rvkeep, keep: true }).then(function (j) { b.disabled = false; report(j, 'Could not keep it'); if (j.ok) toast('Kept', true); }); }; });
+    $$('[data-rvrevert]').forEach(function (b) {
+      b.onclick = function () {
+        var r = list.filter(function (x) { return x.rid === b.dataset.rvrevert; })[0];
+        var what = r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
+        confirmBox('Revert ' + r.alias + '?', '<p>This ' + what + '. Home Assistant reloads it right away. The current version is backed up first.</p>', 'Revert', true).then(function (y) {
+          if (!y) return;
+          api('api/review', { rid: r.rid, keep: false }).then(function (j) { report(j, 'Could not revert'); if (j.ok) toast('Reverted', true); });
+        });
+      };
+    });
   }
 
   // ---------- exposed mode: approvals, connections, events ----------
   var SCOPES = [['read', 'Look only'], ['build', 'Help build'], ['hands', 'Hands on']];
   function scopeSeg(attr, id, cur) { return '<div class="seg" ' + attr + '="' + esc(id) + '">' + SCOPES.map(function (x) { return '<button data-v="' + x[0] + '"' + (cur === x[0] ? ' class="on"' : '') + '>' + x[1] + '</button>'; }).join('') + '</div>'; }
+  var SPANS = [['1h', '1 hour'], ['8h', '8 hours'], ['1d', '1 day'], ['7d', '7 days'], ['30d', '30 days'], ['none', 'No limit']];
+  var apSpan = {};
+  function spanSelect(attr, id, cur) { return '<select ' + attr + '="' + esc(id) + '" aria-label="Access time">' + SPANS.map(function (x) { return '<option value="' + x[0] + '"' + (cur === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>'; }
+  /** "9:42", "5 h 12 min", "3 days" */
+  function left(ms, short) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    if (short || s < 3600) return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    var h = Math.floor(s / 3600), d = Math.floor(h / 24);
+    return d >= 2 ? d + ' days' : h + ' h ' + Math.floor((s % 3600) / 60) + ' min';
+  }
+  // every countdown on the page: elements with data-until="<ms>" (and data-fmt="mmss" for request timers)
+  setInterval(function () {
+    $$('[data-until]').forEach(function (el) {
+      var ms = Number(el.dataset.until) - Date.now();
+      el.textContent = (el.dataset.pre || '') + left(ms, el.dataset.fmt === 'mmss');
+      el.classList.toggle('urgent', ms < 60000 || (el.dataset.fmt !== 'mmss' && ms < 15 * 60000));
+    });
+  }, 1000);
+
   function renderApprovals(s) {
     var list = (s.security && s.security.pending) || [];
-    var sig = list.map(function (p) { return p.id + (apScope[p.id] || 'read'); }).join('|');
-    if (sig === apSig) { list.forEach(function (p) { var t = $('[data-tm="' + p.id + '"]'); if (t) t.textContent = 'expires in ' + Math.max(1, Math.round((p.expiresAt - Date.now()) / 60000)) + ' min'; }); return; }
+    var sig = list.map(function (p) { return p.id + (apScope[p.id] || 'read') + (apSpan[p.id] || ''); }).join('|') + (s.security && s.security.accessDefault);
+    if (sig === apSig) return;
     apSig = sig;
     $('#approvals').innerHTML = list.map(function (p) {
       var sc = apScope[p.id] || 'read';
-      return '<div class="appr"><div class="ah"><span class="dot warn"></span>Claude wants to connect from outside<span class="tm" data-tm="' + esc(p.id) + '">expires in ' + Math.max(1, Math.round((p.expiresAt - Date.now()) / 60000)) + ' min</span></div>' +
+      return '<div class="appr"><div class="ah"><span class="dot warn"></span>Claude wants to connect from outside<span class="tm">Request expires in <b data-until="' + Number(p.expiresAt) + '" data-fmt="mmss">' + left(p.expiresAt - Date.now(), true) + '</b></span></div>' +
         '<div class="ab"><div class="acode">' + esc(p.code) + '</div><div class="ai2"><b>' + esc(p.client) + '</b>' + (p.clientHost ? esc(p.clientHost) + ' · ' : '') + 'from ' + esc(p.ip) + ' · ' + esc(ago(p.createdAt)) +
         '<br>Approve only if the sign-in page you just opened shows this same code.</div></div>' +
-        '<div class="af"><span class="note">It may</span>' + scopeSeg('data-aps', p.id, sc) + '<span class="sp"></span><button data-deny="' + esc(p.id) + '">Deny</button><button class="on" data-approve="' + esc(p.id) + '">Approve</button></div></div>';
+        '<div class="af"><span class="note">It may</span>' + scopeSeg('data-aps', p.id, sc) + '<span class="note">for</span>' + spanSelect('data-apspan', p.id, apSpan[p.id] || (s.security && s.security.accessDefault) || 'none') +
+        '<span class="sp"></span><button data-deny="' + esc(p.id) + '">Deny</button><button class="on" data-approve="' + esc(p.id) + '">Approve</button></div></div>';
     }).join('');
     $$('[data-aps]').forEach(function (g) { $$('button', g).forEach(function (b) { b.onclick = function () { apScope[g.dataset.aps] = b.dataset.v; apSig = ''; renderApprovals(snap); }; }); });
+    $$('[data-apspan]').forEach(function (sel) { sel.onchange = function () { apSpan[sel.dataset.apspan] = sel.value; }; });
     $$('[data-approve]').forEach(function (b) { b.onclick = function () { decide(b.dataset.approve, true); }; });
     $$('[data-deny]').forEach(function (b) { b.onclick = function () { decide(b.dataset.deny, false); }; });
   }
   function decide(id, yes) {
-    var sc = apScope[id] || 'read';
-    var go = function () { api('api/connections/decide', { id: id, approve: yes, scope: sc }).then(function (j) { report(j, 'Could not do that'); if (j.ok) { apSig = ''; toast(yes ? 'Approved. Claude is signing in' : 'Denied', yes); } }); };
+    var sc = apScope[id] || 'read', sp = apSpan[id] || (snap.security && snap.security.accessDefault) || 'none';
+    var go = function () { api('api/connections/decide', { id: id, approve: yes, scope: sc, span: sp }).then(function (j) { report(j, 'Could not do that'); if (j.ok) { apSig = ''; toast(yes ? 'Approved. Claude is signing in' : 'Denied', yes); } }); };
     if (yes && sc === 'hands') confirmBox('Let this connection act on the home?', '<p>Claude, from outside your home, will be able to run services (within Permissions). Blocked domains stay blocked.</p>', 'Approve').then(function (y) { if (y) go(); });
     else go();
   }
@@ -883,14 +1022,28 @@
     if (cs !== connSig) {
       connSig = cs;
       $('#secConns').innerHTML = (sec.connections || []).length ? sec.connections.map(function (c) {
-        return '<div class="conn"><div class="ci"><b>' + esc(c.client) + '</b><span>Signed in ' + esc(when(c.createdAt)) + ' · ' + (c.lastUsedAt ? 'last used ' + esc(ago(c.lastUsedAt)) + (c.lastIp ? ' from ' + esc(c.lastIp) : '') : 'not used yet') + ' · ' + plural(c.uses, 'request') + '</span></div>' +
-          scopeSeg('data-cscope', c.id, c.scope) + '<button class="danger" data-revoke="' + esc(c.id) + '">Revoke</button></div>';
+        return '<div class="conn"><div class="ci"><b>' + esc(c.client) + '</b><span>Signed in ' + esc(when(c.createdAt)) + ' · ' + (c.lastUsedAt ? 'last used ' + esc(ago(c.lastUsedAt)) + (c.lastIp ? ' from ' + esc(c.lastIp) : '') : 'not used yet') + ' · ' + plural(c.uses, 'request') + '</span>' +
+          '<span class="acc-left">' + (c.expiresAt ? 'Access ends in <b data-until="' + Number(c.expiresAt) + '">' + left(c.expiresAt - Date.now()) + '</b>' : 'No time limit (ends after 30 days unused)') + '</span></div>' +
+          scopeSeg('data-cscope', c.id, c.scope) + '<span class="cspan">' + spanSelect('data-cspan', c.id, '') + '</span><button class="danger" data-revoke="' + esc(c.id) + '">Revoke</button></div>';
       }).join('') : '<div class="note">' + (ex ? 'None yet. When Claude signs in from outside and you approve it, it shows up here.' : 'None. Connections from outside need exposed mode.') + '</div>';
+      $$('[data-cspan]').forEach(function (sel) {
+        sel.insertAdjacentHTML('afterbegin', '<option value="" selected disabled>Access time…</option>');
+        sel.onchange = function () {
+          var label = sel.options[sel.selectedIndex].text;
+          confirmBox('Set access to ' + label.toLowerCase() + '?', '<p>' + (sel.value === 'none' ? 'This connection then has no time limit; it ends if unused for 30 days, or when you revoke it.' : 'Counted from now. When it runs out, the connection stops working and Claude has to sign in and be approved again.') + '</p>', 'Set').then(function (y) {
+            if (!y) { sel.selectedIndex = 0; return; }
+            api('api/connections/span', { id: sel.dataset.cspan, span: sel.value }).then(function (j) { report(j, 'Could not change it'); connSig = ''; if (j.ok) toast('Access time set', true); });
+          });
+        };
+      });
       $$('[data-cscope]').forEach(function (g) { $$('button', g).forEach(function (b) { b.onclick = function () { api('api/connections/scope', { id: g.dataset.cscope, scope: b.dataset.v }).then(function (j) { report(j, 'Could not change it'); connSig = ''; }); }; }); });
       $$('[data-revoke]').forEach(function (b) { b.onclick = function () { confirmBox('Revoke this connection?', '<p>It stops working at once. Claude has to sign in again, and you approve it again.</p>', 'Revoke', true).then(function (y) { if (y) api('api/connections/revoke', { id: b.dataset.revoke }).then(function (j) { report(j, 'Could not revoke'); connSig = ''; }); }); }; });
     }
     $('#secRevokeAll').disabled = !(sec.connections || []).length;
     renderTotp(s);
+    var ss = $('#secSpan');
+    if (!ss.options.length) ss.innerHTML = SPANS.map(function (x) { return '<option value="' + x[0] + '">' + x[1] + '</option>'; }).join('');
+    if (document.activeElement !== ss) ss.value = sec.accessDefault || 'none';
     paintSeg($('#secTokRemote'), sec.allowTokenRemote ? '1' : '0');
     paintSeg($('#secTokScope'), sec.tokenScope);
     $('#secKey').innerHTML = (sec.keyMismatch ? '<div class="errbox"><b>The encryption key does not match.</b> The saved tokens were encrypted with a different key. Put back the right HOMECLAUDE_MASTER_KEY, or enter the Home Assistant token again.</div>' : '') +
@@ -968,6 +1121,7 @@
       else go();
     };
   });
+  $('#secSpan').onchange = function () { api('api/security', { accessDefault: this.value }).then(function (j) { report(j, 'Could not save'); if (j.ok) toast('Saved', true); }); };
   $('#secPubSave').onclick = function () { api('api/settings', { publicUrl: $('#secPub').value.trim() }).then(function (j) { report(j, 'Could not save'); if (j.ok) { pubLoaded = false; toast('Saved', true); } }); };
   $('#secTest').onclick = function () { var b = this; b.disabled = true; b.textContent = 'Testing…'; api('api/security/selftest', {}).then(function (j) { b.disabled = false; b.textContent = 'Test'; report(j, 'Could not test'); }); };
   $$('#secTokRemote button').forEach(function (b) {
@@ -1027,6 +1181,9 @@
   $('#permBtn').onclick = function () { showTab(true); showSub('perm'); };
   $('#actAll').onclick = function () { showTab(true); showSub('activity'); };
   $$('#accSeg button').forEach(function (b) { b.onclick = function () { setAccess({ enabled: b.dataset.v === '1' }); }; });
+  $$('#rvOn button').forEach(function (b) { b.onclick = function () { api('api/review', { enabled: b.dataset.v === '1' }).then(function (j) { report(j, 'Could not save'); }); }; });
+  $('#rvTime').onchange = function () { api('api/review', { timeoutMin: Number(this.value) }).then(function (j) { report(j, 'Could not save'); }); };
+  $$('#rvWhat button').forEach(function (b) { b.onclick = function () { api('api/review', { ifNoAnswer: b.dataset.v }).then(function (j) { report(j, 'Could not save'); }); }; });
   $$('#pEnabled button').forEach(function (b) { b.onclick = function () { setAccess({ enabled: b.dataset.v === '1' }); }; });
 
   var PERM_WARN = {

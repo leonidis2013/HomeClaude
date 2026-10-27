@@ -49,7 +49,8 @@ const DEFAULTS = {
   mcpToken: '',
   publicUrl: '',
   backup: { keep: 30 },
-  security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '', totp: { enabled: false, secret: '', pending: '', since: 0, lastCounter: 0, maxScope: 'build', off: false } },
+  review: { enabled: true, timeoutMin: 0, ifNoAnswer: 'revert' },
+  security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '', accessDefault: 'none', totp: { enabled: false, secret: '', pending: '', since: 0, lastCounter: 0, maxScope: 'build', off: false } },
   setup: { completed: false, marks: {} }
 };
 
@@ -78,7 +79,7 @@ const savedCfg = DEMO ? {} : readJson(cfgPath, {});
 let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), savedCfg);
 // installs from before the setup guide already went through setup
 if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: true, marks: {} };
-['ha', 'access', 'backup', 'setup', 'security'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
+['ha', 'access', 'backup', 'setup', 'security', 'review'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
 if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
 cfg.security.totp = Object.assign({}, DEFAULTS.security.totp, cfg.security.totp || {});
@@ -101,6 +102,7 @@ function changeConfig(mutator) {
 const state = DEMO ? {} : readJson(statePath, {});
 if (!Array.isArray(state.activity)) state.activity = [];
 if (!Array.isArray(state.security)) state.security = [];
+if (!Array.isArray(state.reviews)) state.reviews = [];
 const oauthPath = path.join(dataDir, 'oauth.json');
 let saveTimer = null;
 function saveState() {
@@ -173,7 +175,78 @@ function pinOk(given) {
 // ---------- Home Assistant ----------
 const ha = DEMO ? require('./lib/demo.js').client() : Ha.create({ getUrl: () => cfg.ha.url, getToken: () => secrets.dec(cfg.ha.token) });
 const backups = Backups.create({ dir: path.join(dataDir, 'backups'), keep: () => cfg.backup.keep });
-const tools = Tools.create({ ha, backups, access: () => cfg.access });
+const tools = Tools.create({ ha, backups, access: () => cfg.access, onChange: (info, who) => recordChange(info, who), reviewInfo: () => reviewInfo() });
+
+// ---------- keep or revert: every change Claude makes goes live, and you decide afterwards ----------
+const REVIEW_TIMES = [0, 15, 60, 240, 1440];
+const clone = (x) => (x == null ? null : JSON.parse(JSON.stringify(x)));
+function recordChange(info, who) {
+  if (!cfg.review.enabled) return null;
+  const now = Date.now();
+  // a second change to the same thing while you have not answered: Revert still goes back to the very first version
+  let r = state.reviews.find((x) => x.status === 'waiting' && x.kind === info.kind && x.id === String(info.id));
+  if (!r) {
+    r = { rid: crypto.randomBytes(6).toString('hex'), kind: info.kind, id: String(info.id), before: clone(info.before), backup: info.backup || null, at: now, status: 'waiting', changes: 0 };
+    state.reviews.unshift(r);
+  }
+  r.alias = String(info.alias || r.alias || r.id).slice(0, 120);
+  r.after = clone(info.after); r.who = who && who.remote ? who.label : 'Claude'; r.where = who && who.remote ? 'outside' : 'home'; r.updatedAt = now; r.changes++;
+  r.action = r.before ? (r.after ? 'changed' : 'deleted') : (r.after ? 'created' : null);
+  if (!r.action) { r.status = 'withdrawn'; r.decidedAt = now; } // made and deleted again: nothing left to review
+  r.autoAt = cfg.review.timeoutMin ? now + cfg.review.timeoutMin * 60e3 : null;
+  trimReviews(); saveState(); broadcastSoon();
+  if (!r.action) return null;
+  return 'Applied now. The person is asked in HomeClaude to keep or revert this change' +
+    (r.autoAt ? '; if they do not answer within ' + cfg.review.timeoutMin + ' minutes it is ' + (cfg.review.ifNoAnswer === 'revert' ? 'reverted' : 'kept') + ' automatically' : '') + '.';
+}
+function trimReviews() {
+  const waiting = state.reviews.filter((x) => x.status === 'waiting');
+  const done = state.reviews.filter((x) => x.status !== 'waiting').sort((a, b) => (b.decidedAt || 0) - (a.decidedAt || 0)).slice(0, 60);
+  state.reviews = waiting.concat(done);
+}
+function reviewInfo() {
+  const day = Date.now() - 86400e3;
+  return {
+    waiting: state.reviews.filter((x) => x.status === 'waiting').map((x) => ({ kind: x.kind, id: x.id, alias: x.alias, action: x.action, since: new Date(x.at).toISOString() })),
+    recently_reverted: state.reviews.filter((x) => x.status === 'reverted' && x.decidedAt > day).map((x) => ({ kind: x.kind, id: x.id, alias: x.alias, action: x.action, reverted: new Date(x.decidedAt).toISOString() }))
+  };
+}
+async function decideReview(rid, keep, by) {
+  const r = state.reviews.find((x) => x.rid === rid);
+  if (!r || r.status !== 'waiting') return { ok: false, error: 'That change was already answered' };
+  if (!keep) {
+    try {
+      let current = null;
+      try { current = await ha.rest('GET', '/api/config/' + r.kind + '/config/' + encodeURIComponent(r.id)); } catch (e) { if (e.status !== 404) throw e; }
+      if (current) backups.save(r.kind, r.id, current, 'before-revert');
+      if (r.action === 'created') { if (current) await ha.rest('DELETE', '/api/config/' + r.kind + '/config/' + encodeURIComponent(r.id)); }
+      else await ha.rest('POST', '/api/config/' + r.kind + '/config/' + encodeURIComponent(r.id), r.before);
+      backupsChanged();
+    } catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }
+  }
+  r.status = keep ? 'kept' : 'reverted'; r.decidedAt = Date.now(); r.by = by;
+  logActivity({ t: r.decidedAt, tool: (keep ? 'kept' : 'reverted') + ' (' + by + ')', args: r.kind + ' ' + r.alias + ' (' + r.action + ')', ok: true, ms: 0, write: !keep });
+  trimReviews(); saveState(); broadcastSoon();
+  return { ok: true };
+}
+let reviewTimerBusy = false;
+async function reviewTimer() {
+  if (reviewTimerBusy) return;
+  reviewTimerBusy = true;
+  try {
+    for (const r of state.reviews.filter((x) => x.status === 'waiting' && x.autoAt && x.autoAt <= Date.now())) {
+      const res = await decideReview(r.rid, cfg.review.ifNoAnswer !== 'revert', 'no answer in time');
+      if (!res.ok) { r.autoAt = Date.now() + 5 * 60e3; saveState(); } // Home Assistant away: try again later
+    }
+  } finally { reviewTimerBusy = false; }
+}
+function setReview(b) {
+  return changeConfig((c) => {
+    if (typeof b.enabled === 'boolean') c.review.enabled = b.enabled;
+    if (b.timeoutMin != null) { const m = Number(b.timeoutMin); if (!REVIEW_TIMES.includes(m)) return 'Unknown time'; c.review.timeoutMin = m; }
+    if (b.ifNoAnswer != null) { if (!['keep', 'revert'].includes(b.ifNoAnswer)) return 'Choose keep or revert'; c.review.ifNoAnswer = b.ifNoAnswer; }
+  });
+}
 let haStatus = { ok: false, configured: false, checking: false, checkedAt: 0, error: '', version: '', name: '', ms: 0 };
 
 async function checkHa() {
@@ -238,7 +311,7 @@ const mcp = Mcp.create({
     const t0 = Date.now(), def = tools.all().find((x) => x.name === name);
     if (who && who.remote && callLimit.locked(who.key)) return { isError: true, text: 'Too many requests from this connection. Wait a minute.' };
     if (who && who.remote) callLimit.hit(who.key);
-    const r = await tools.call(name, a, who && who.access);
+    const r = await tools.call(name, a, who && who.access, who);
     if (def && def.needs) backupsChanged();
     logActivity({ t: t0, tool: name, args: argSummary(a), ok: !r.isError, ms: Date.now() - t0, write: !!(def && def.needs), error: r.isError ? r.text.slice(0, 300) : undefined, who: who ? who.label : undefined, remote: !!(who && who.remote), ip: who ? who.ip : undefined });
     return r;
@@ -357,7 +430,7 @@ let oauthSaveTimer = null;
 if (!Array.isArray(state.totpFails)) state.totpFails = [];
 function totpAvailable() {
   const t = cfg.security.totp;
-  return { ok: !!(t.enabled && t.secret && !t.off && exposed()), maxScope: t.maxScope };
+  return { ok: !!(t.enabled && t.secret && !t.off && exposed()), maxScope: t.maxScope, span: cfg.security.accessDefault };
 }
 function totpCheck(code, ip) {
   const t = cfg.security.totp, now = Date.now();
@@ -437,6 +510,7 @@ function setSecurity(b) {
       c.security.mode = b.mode;
     }
     if (typeof b.allowTokenRemote === 'boolean') c.security.allowTokenRemote = b.allowTokenRemote;
+    if (b.accessDefault != null) { if (!(b.accessDefault in OAuth.SPANS)) return 'Unknown access time'; c.security.accessDefault = b.accessDefault; }
     if (b.tokenScope != null) { if (!OAuth.SCOPES.includes(b.tokenScope)) return 'Unknown permission level'; c.security.tokenScope = b.tokenScope; }
   });
   if (r.ok && changedMode) securityEvent('mode-changed', { mode: changedMode });
@@ -474,7 +548,7 @@ async function runSelfTest() {
 
 function securitySnapshot() {
   return {
-    mode: cfg.security.mode, publicUrl: cfg.publicUrl, publicPort: PUBLIC_PORT, adminPort: PORT,
+    mode: cfg.security.mode, publicUrl: cfg.publicUrl, accessDefault: cfg.security.accessDefault, publicPort: PUBLIC_PORT, adminPort: PORT,
     allowTokenRemote: cfg.security.allowTokenRemote, tokenScope: cfg.security.tokenScope,
     keyWhere: DEMO ? 'demo' : secrets.where(), keyFileOnVolume: !DEMO && secrets.hasFileKey(), keyMismatch,
     pending: oauth.listPending(), connections: oauth.connections(), events: state.security.slice(0, 80), selfTest,
@@ -520,6 +594,8 @@ function snapshot() {
     activityTotal: state.activity.length,
     lastCallAt: state.lastCallAt || 0,
     pinRequired: pinSet(),
+    review: cfg.review,
+    reviews: state.reviews.slice(0, 40),
     health,
     security: securitySnapshot(),
     setup: cfg.setup,
@@ -673,12 +749,14 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/setup') return postJson(req, res, setupAction);
   if (req.method === 'POST' && url === '/api/security') return postJson(req, res, setSecurity);
   if (req.method === 'POST' && url === '/api/security/selftest') return postJson(req, res, runSelfTest);
-  if (req.method === 'POST' && url === '/api/connections/decide') return postJson(req, res, (b) => oauth.decide(b.id, !!b.approve, b.scope, Net.clientIp(req, false)));
+  if (req.method === 'POST' && url === '/api/connections/decide') return postJson(req, res, (b) => oauth.decide(b.id, !!b.approve, b.scope, Net.clientIp(req, false), b.span == null ? cfg.security.accessDefault : b.span));
+  if (req.method === 'POST' && url === '/api/connections/span') return postJson(req, res, (b) => (oauth.setSpan(String(b.id || ''), b.span) ? { ok: true } : { ok: false, error: 'Could not change it' }));
   if (req.method === 'POST' && url === '/api/connections/revoke') return postJson(req, res, (b) => {
     if (b.all) { const n = oauth.revokeAll('all connections revoked on the HomeClaude page'); return { ok: true, revoked: n }; }
     return oauth.revokeGrant(String(b.id || ''), 'revoked on the HomeClaude page') ? { ok: true } : { ok: false, error: 'That connection is gone' };
   });
   if (req.method === 'POST' && url === '/api/connections/scope') return postJson(req, res, (b) => (oauth.setScope(String(b.id || ''), b.scope) ? { ok: true } : { ok: false, error: 'Could not change it' }));
+  if (req.method === 'POST' && url === '/api/review') return postJson(req, res, (b) => (b.rid ? decideReview(String(b.rid), !!b.keep, 'you') : setReview(b)), { limit: 4096 });
   if (req.method === 'POST' && url === '/api/totp') return postJson(req, res, totpAction);
   if (req.method === 'POST' && url === '/api/security/clear') return postJson(req, res, () => { state.security = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/activity-clear') return postJson(req, res, () => { state.activity = []; saveState(); return { ok: true }; });
@@ -804,6 +882,7 @@ function start() {
   if (!DEMO && UPDATE_CHECK) { setTimeout(checkSelfUpdate, 5000).unref(); setInterval(checkSelfUpdate, 6 * 3600 * 1000).unref(); }
   setTimeout(checkHa, DEMO ? 200 : 1000).unref();
   runHealth(); setInterval(runHealth, 60000).unref();
+  setInterval(reviewTimer, Number(process.env.HOMECLAUDE_REVIEW_TICK_MS) || 15000).unref();
   setInterval(checkHa, 60000).unref();
   publicServer.on('error', (e) => console.error('Public port ' + PUBLIC_PORT + ': ' + e.message));
   publicServer.listen(PUBLIC_PORT, '0.0.0.0', () => console.log('Public port ' + PUBLIC_PORT + ': ' + (exposed() ? 'exposed mode, Claude sign-in and /mcp only' : 'local mode, serves nothing')));

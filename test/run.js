@@ -334,7 +334,7 @@ async function signIn(o, opts) {
   assert.strictEqual(p.code, shown, 'the home page shows the same code as the sign-in page');
   assert.strictEqual(o.status(data.id, data.s).body.status, 'waiting');
   assert.strictEqual(o.status(data.id, 'wrong-secret').status, 404, 'only the sign-in page can poll');
-  o.decide(p.id, true, opts.scope || 'read', '192.168.1.5');
+  assert.ok(o.decide(p.id, true, opts.scope || 'read', '192.168.1.5', opts.span || 'none').ok);
   const red = new URL(o.status(data.id, data.s).body.redirect);
   assert.strictEqual(red.searchParams.get('state'), 'xyz'); assert.strictEqual(red.searchParams.get('iss'), 'https://hc.example.com');
   return { cid, verifier, code: red.searchParams.get('code') };
@@ -385,6 +385,32 @@ test('oauth: approval at home, PKCE, one-time codes, rotation, theft detection',
   assert.ok(o.revokeGrant(c.id) && !o.verify(t4.access_token));
   // tokens are stored only as hashes
   assert.ok(!JSON.stringify(oauthWith().store()).includes('hca_'));
+});
+
+test('oauth: access time ends a connection, and can be extended', async () => {
+  const { o, events } = oauthWith();
+  const s1 = await signIn(o, { span: '1h' });
+  const t = (await o.token({ grant_type: 'authorization_code', client_id: s1.cid, code: s1.code, code_verifier: s1.verifier })).body;
+  const c = o.connections()[0];
+  assert.ok(c.expiresAt > Date.now() + 3590e3 && c.expiresAt <= Date.now() + 3600e3, 'one hour');
+  assert.ok(t.expires_in <= 3600);
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 2 * 3600e3; // two hours later
+    assert.strictEqual(o.verify(t.access_token), null, 'no longer works');
+    assert.strictEqual((await o.token({ grant_type: 'refresh_token', client_id: s1.cid, refresh_token: t.refresh_token })).body.error, 'invalid_grant', 'cannot refresh past it either');
+  } finally { Date.now = realNow; }
+  assert.ok(events.includes('connection-revoked'));
+  // extending
+  const s2 = await signIn(o, { span: '1h' });
+  const t2 = (await o.token({ grant_type: 'authorization_code', client_id: s2.cid, code: s2.code, code_verifier: s2.verifier })).body;
+  const g2 = o.connections().find((x) => x.expiresAt);
+  assert.ok(o.setSpan(g2.id, 'none') && o.connections().find((x) => x.id === g2.id).expiresAt === null);
+  try { Date.now = () => realNow() + 2 * 3600e3; assert.ok((await o.token({ grant_type: 'refresh_token', client_id: s2.cid, refresh_token: t2.refresh_token })).body.access_token, 'extended connection refreshes'); } finally { Date.now = realNow; }
+  // an unknown access time is refused
+  const reg = o.register({ client_name: 'x', redirect_uris: ['https://claude.ai/cb'] });
+  await o.authorize({ response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'https://claude.ai/cb', code_challenge: 'f'.repeat(43), code_challenge_method: 'S256' }, 'ip');
+  assert.ok(!o.decide(o.listPending()[0].id, true, 'read', 'ip', '99y').ok);
 });
 
 test('oauth: client metadata documents (how claude.ai identifies itself)', async () => {
@@ -520,6 +546,89 @@ test('server: approving with an authenticator code from outside', async () => {
     const pend = sec.pending.find((p) => p.ip === '203.0.113.23');
     assert.ok((await req(port, 'POST', '/api/connections/decide', { id: pend.id, approve: true, scope: 'read' }, PIN)).j.ok);
   } finally { proc.kill(); }
+});
+
+test('server: keep or revert Claude\'s changes', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('rev');
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1', HOMECLAUDE_REVIEW_TICK_MS: '200' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const W = f.world.w;
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { edit: true, delete: true });
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const call = async (name, args) => JSON.parse((await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, auth)).j.result.content[0].text);
+    const reviews = async () => (await req(port, 'GET', '/api/state')).j.reviews;
+    const original = JSON.parse(JSON.stringify(W.automations['1700000000001']));
+    // two edits in a row: one review item, and Revert goes back to the original
+    let cfg = (await call('get_automation', { id: '1700000000001' })).config;
+    cfg.alias = 'Porch light v2'; let r = await call('save_automation', { id: '1700000000001', config: cfg });
+    assert.ok(/keep or revert/.test(r.review), 'Claude is told about the review');
+    cfg.alias = 'Porch light v3'; await call('save_automation', { id: '1700000000001', config: cfg });
+    let rv = await reviews();
+    assert.strictEqual(rv.filter((x) => x.status === 'waiting').length, 1);
+    assert.ok(rv[0].changes === 2 && rv[0].action === 'changed' && rv[0].before.alias === original.alias && rv[0].after.alias === 'Porch light v3');
+    assert.strictEqual(W.automations['1700000000001'].alias, 'Porch light v3', 'the change is live right away');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.strictEqual(W.automations['1700000000001'].alias, original.alias, 'reverted to the original');
+    // Claude sees the revert
+    const ov = await call('get_overview', {});
+    assert.strictEqual(ov.homeclaude.change_reviews.recently_reverted[0].id, '1700000000001');
+    // created, then reverted: it is deleted again
+    const made = await call('save_automation', { config: { alias: 'New one', triggers: [{ trigger: 'time', at: '07:00:00' }], actions: [{ action: 'light.turn_on', target: { entity_id: 'light.kitchen' } }] } });
+    rv = await reviews();
+    const ci = rv.find((x) => x.status === 'waiting' && x.id === made.id);
+    assert.strictEqual(ci.action, 'created');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: ci.rid, keep: false })).j.ok);
+    assert.ok(!W.automations[made.id], 'the new automation is gone');
+    // deleted, then reverted: it comes back
+    await call('delete_automation', { id: '1700000000003' });
+    assert.ok(!W.automations['1700000000003']);
+    const di = (await reviews()).find((x) => x.status === 'waiting' && x.id === '1700000000003');
+    assert.strictEqual(di.action, 'deleted');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: di.rid, keep: false })).j.ok);
+    assert.strictEqual(W.automations['1700000000003'].alias, 'Morning coffee', 'back again');
+    // keep
+    cfg = (await call('get_automation', { id: '1700000000002' })).config; cfg.description = 'kept change';
+    await call('save_automation', { id: '1700000000002', config: cfg });
+    const ki = (await reviews()).find((x) => x.status === 'waiting');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: ki.rid, keep: true })).j.ok);
+    assert.strictEqual(W.automations['1700000000002'].description, 'kept change');
+    assert.ok(!(await req(port, 'POST', '/api/review', { rid: ki.rid, keep: false })).j.ok, 'answered once only');
+    // no answer in time: decided for you
+    assert.ok((await req(port, 'POST', '/api/review', { timeoutMin: 15, ifNoAnswer: 'revert' })).j.ok);
+    cfg = (await call('get_automation', { id: '1700000000002' })).config; cfg.description = 'nobody answered';
+    await call('save_automation', { id: '1700000000002', config: cfg });
+    // pretend 15 minutes passed by pulling the deadline in
+    assert.ok((await reviews()).find((x) => x.status === 'waiting').autoAt > Date.now() + 14 * 60e3, 'deadline set 15 minutes out');
+    assert.ok(!(await req(port, 'POST', '/api/review', { timeoutMin: 7 })).j.ok, 'only the offered times');
+    // review off: changes just apply
+    assert.ok((await req(port, 'POST', '/api/review', { enabled: false })).j.ok);
+    cfg.description = 'no review'; r = await call('save_automation', { id: '1700000000002', config: cfg });
+    assert.ok(!r.review);
+  } finally { proc.kill(); await f.close(); }
+});
+
+test('server: an unanswered change is reverted when its time runs out', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('rev2');
+  // a saved install with a 15-minute limit and one waiting change whose deadline has passed
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ reviews: [{ rid: 'r1', kind: 'automation', id: '1700000000001', before: { alias: 'Before', triggers: [{ trigger: 'time', at: '06:00:00' }], actions: [] }, after: { alias: 'After' }, alias: 'After', action: 'changed', status: 'waiting', at: Date.now() - 20 * 60e3, updatedAt: Date.now() - 20 * 60e3, autoAt: Date.now() - 1000, changes: 1 }] }));
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1', HOMECLAUDE_REVIEW_TICK_MS: '200' });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ review: { enabled: true, timeoutMin: 15, ifNoAnswer: 'revert' } }));
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    let rv;
+    for (let i = 0; i < 30; i++) { rv = (await req(port, 'GET', '/api/state')).j.reviews[0]; if (rv.status !== 'waiting') break; await new Promise((r) => setTimeout(r, 200)); }
+    assert.strictEqual(rv.status, 'reverted'); assert.strictEqual(rv.by, 'no answer in time');
+    assert.strictEqual(f.world.w.automations['1700000000001'].alias, 'Before');
+  } finally { proc.kill(); await f.close(); }
 });
 
 test('server: token, origin, access switch, PIN, live Home Assistant settings', async () => {
