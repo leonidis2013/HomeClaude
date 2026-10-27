@@ -131,7 +131,7 @@ test('tools: read-only by default, write tools hidden', async () => {
   const names = t.list().map((x) => x.name);
   assert.ok(names.includes('get_traces') && !names.includes('save_automation') && !names.includes('call_service'));
   const r = await t.call('call_service', { domain: 'light', service: 'turn_on' });
-  assert.ok(r.isError && /switched off/.test(r.text));
+  assert.ok(r.isError && /not allowed/.test(r.text));
 });
 
 test('tools: overview, entity, traces, logs find the freezer problem', async () => {
@@ -283,10 +283,174 @@ async function req(port, method, p, body, headers) {
   return { status: res.status, j, text };
 }
 
+// ---------- security ----------
+const Net = R('lib/netsec'), OAuth = R('lib/oauth'), Secrets = R('lib/secrets');
+const b64sha = (s) => crypto.createHash('sha256').update(s).digest('base64url');
+
+test('security: private addresses, client address, rate limits', () => {
+  ['10.1.2.3', '192.168.1.5', '172.20.0.1', '127.0.0.1', '::1', '::ffff:192.168.0.9', '100.101.1.1', 'fd12::1', 'fe80::1'].forEach((ip) => assert.ok(Net.isPrivate(ip), ip));
+  ['8.8.8.8', '172.32.0.1', '2606:4700::1', '', 'nonsense'].forEach((ip) => assert.ok(!Net.isPrivate(ip), ip));
+  const req = (h, peer) => ({ headers: h, socket: { remoteAddress: peer || '172.17.0.1' } });
+  assert.strictEqual(Net.clientIp(req({ 'x-forwarded-for': '1.2.3.4, 5.6.7.8' }), true), '5.6.7.8', 'the proxy-added (last) entry, not the made-up first one');
+  assert.strictEqual(Net.clientIp(req({ 'cf-connecting-ip': '9.9.9.9', 'x-forwarded-for': '1.1.1.1' }), true), '9.9.9.9');
+  assert.strictEqual(Net.clientIp(req({ 'x-forwarded-for': '1.1.1.1' }), false), '172.17.0.1', 'ignored off the public port');
+  assert.ok(Net.cameThroughProxy(req({ forwarded: 'for=1.2.3.4' })) && !Net.cameThroughProxy(req({})));
+  const l = Net.limiter({ max: 3, windowMs: 60000, lockMs: 60000 });
+  assert.ok(!l.hit('a') && !l.hit('a') && l.hit('a'), 'third failure locks');
+  assert.ok(l.locked('a') > 0 && !l.locked('b'));
+  const h = Net.inlineHashes('<style>a{}</style><script>x()</script>');
+  assert.ok(/^'sha256-/.test(h.scripts[0]) && h.styles.length === 1);
+});
+
+test('security: master key moves tokens off the volume', () => {
+  const d = tmp('key'), kf = path.join(d, 'secret.key');
+  const a = Secrets.create(kf);
+  const blob = a.enc('ha-token'), check = a.makeCheck();
+  assert.ok(blob.startsWith('enc1:') && fs.existsSync(kf));
+  const b = Secrets.create(kf, { masterKey: 'correct horse battery staple' });
+  const moved = b.migrate({ ha: blob, check });
+  assert.ok(moved.ha.startsWith('enc2:') && b.dec(moved.ha) === 'ha-token' && b.checkOk(moved.check));
+  assert.ok(b.dropFileKey() && !fs.existsSync(kf));
+  const wrong = Secrets.create(kf, { masterKey: 'wrong' });
+  assert.strictEqual(wrong.dec(moved.ha), '', 'wrong master key decrypts nothing');
+  assert.ok(!wrong.checkOk(moved.check), 'and the mismatch is detected');
+});
+
+function oauthWith(extra) {
+  let store = {};
+  const events = [];
+  const o = OAuth.create(Object.assign({ load: () => store, save: (db) => { store = JSON.parse(JSON.stringify(db)); }, base: () => 'https://hc.example.com', event: (t, d) => events.push(t) }, extra || {}));
+  return { o, events, store: () => store };
+}
+async function signIn(o, opts) {
+  opts = opts || {};
+  const reg = o.register({ client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] });
+  const cid = reg.body.client_id, verifier = crypto.randomBytes(32).toString('base64url');
+  const a = await o.authorize({ response_type: 'code', client_id: cid, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', code_challenge: b64sha(verifier), code_challenge_method: 'S256', state: 'xyz', resource: 'https://hc.example.com/mcp' }, '203.0.113.5');
+  assert.strictEqual(a.status, 200, JSON.stringify(a));
+  const data = JSON.parse(/<script type="application\/json" id="d">(.*?)<\/script>/.exec(a.html)[1]);
+  const shown = /<div class="code"[^>]*>([A-Z0-9-]+)<\/div>/.exec(a.html)[1];
+  const p = o.listPending()[0];
+  assert.strictEqual(p.code, shown, 'the home page shows the same code as the sign-in page');
+  assert.strictEqual(o.status(data.id, data.s).body.status, 'waiting');
+  assert.strictEqual(o.status(data.id, 'wrong-secret').status, 404, 'only the sign-in page can poll');
+  o.decide(p.id, true, opts.scope || 'read', '192.168.1.5');
+  const red = new URL(o.status(data.id, data.s).body.redirect);
+  assert.strictEqual(red.searchParams.get('state'), 'xyz'); assert.strictEqual(red.searchParams.get('iss'), 'https://hc.example.com');
+  return { cid, verifier, code: red.searchParams.get('code') };
+}
+
+test('oauth: approval at home, PKCE, one-time codes, rotation, theft detection', async () => {
+  const { o, events } = oauthWith();
+  assert.strictEqual(o.resourceMetadata().resource, 'https://hc.example.com/mcp');
+  assert.deepStrictEqual(o.serverMetadata().code_challenge_methods_supported, ['S256']);
+  // bad requests
+  assert.strictEqual(o.register({ redirect_uris: ['http://evil.example/cb'] }).status, 400, 'plain http redirect refused');
+  const reg = o.register({ client_name: 'x', redirect_uris: ['https://claude.ai/cb'] });
+  const noPkce = await o.authorize({ response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'https://claude.ai/cb', state: 's' }, 'ip');
+  assert.ok(noPkce.status === 302 && /error=invalid_request/.test(noPkce.location), 'PKCE required');
+  const wrongRedirect = await o.authorize({ response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'https://evil.example/cb', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' }, 'ip');
+  assert.ok(wrongRedirect.status === 400 && wrongRedirect.html, 'never redirects to an unregistered address');
+  assert.strictEqual((await o.authorize({ response_type: 'code', client_id: 'nobody', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' }, 'ip')).status, 400);
+  // the happy path
+  const s1 = await signIn(o, { scope: 'build' });
+  const badPkce = await o.token({ grant_type: 'authorization_code', client_id: s1.cid, code: s1.code, code_verifier: 'wrong'.repeat(10), redirect_uri: 'https://claude.ai/api/mcp/auth_callback' });
+  assert.strictEqual(badPkce.body.error, 'invalid_grant');
+  const s2 = await signIn(o, { scope: 'build' });
+  const t = await o.token({ grant_type: 'authorization_code', client_id: s2.cid, code: s2.code, code_verifier: s2.verifier, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', resource: 'https://hc.example.com/mcp' });
+  assert.strictEqual(t.status, 200, JSON.stringify(t.body));
+  const g = o.verify(t.body.access_token, '1.2.3.4');
+  assert.ok(g && g.scope === 'build');
+  assert.strictEqual(o.verify('hca_made_up'), null);
+  // codes work once; using one twice cuts off what it made
+  const again = await o.token({ grant_type: 'authorization_code', client_id: s2.cid, code: s2.code, code_verifier: s2.verifier });
+  assert.strictEqual(again.body.error, 'invalid_grant');
+  assert.strictEqual(o.verify(t.body.access_token), null, 'reused code revoked the connection');
+  // refresh rotation and reuse detection
+  const s3 = await signIn(o);
+  const t3 = (await o.token({ grant_type: 'authorization_code', client_id: s3.cid, code: s3.code, code_verifier: s3.verifier })).body;
+  const r1 = (await o.token({ grant_type: 'refresh_token', client_id: s3.cid, refresh_token: t3.refresh_token })).body;
+  assert.ok(r1.access_token && r1.refresh_token !== t3.refresh_token, 'refresh token rotates');
+  assert.ok(o.verify(r1.access_token));
+  const stolen = await o.token({ grant_type: 'refresh_token', client_id: s3.cid, refresh_token: t3.refresh_token });
+  assert.strictEqual(stolen.body.error, 'invalid_grant');
+  assert.strictEqual(o.verify(r1.access_token), null, 'old refresh token used again: whole connection revoked');
+  assert.ok(events.includes('connection-revoked'));
+  // another client cannot use someone else's refresh token
+  const s4 = await signIn(o);
+  const t4 = (await o.token({ grant_type: 'authorization_code', client_id: s4.cid, code: s4.code, code_verifier: s4.verifier })).body;
+  assert.strictEqual((await o.token({ grant_type: 'refresh_token', client_id: s3.cid, refresh_token: t4.refresh_token })).body.error, 'invalid_grant');
+  // revoke from home
+  const c = o.connections().find((x) => x.scope === 'read');
+  assert.ok(o.revokeGrant(c.id) && !o.verify(t4.access_token));
+  // tokens are stored only as hashes
+  assert.ok(!JSON.stringify(oauthWith().store()).includes('hca_'));
+});
+
+test('oauth: client metadata documents (how claude.ai identifies itself)', async () => {
+  const doc = { client_id: 'https://claude.ai/oauth/claude-client', client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] };
+  const { o } = oauthWith({ fetchDoc: async (u) => (u === doc.client_id ? doc : { client_id: 'https://other.example/x', redirect_uris: ['https://x/cb'] }) });
+  const c = await o.resolveClient(doc.client_id);
+  assert.ok(c && c.name === 'Claude' && c.kind === 'metadata');
+  assert.strictEqual(await o.resolveClient('https://evil.example/claimed'), null, 'document must name itself');
+  assert.strictEqual(await o.resolveClient('http://claude.ai/x'), null, 'https only');
+  const a = await o.authorize({ response_type: 'code', client_id: doc.client_id, redirect_uri: doc.redirect_uris[0], code_challenge: 'b'.repeat(43), code_challenge_method: 'S256' }, 'ip');
+  assert.strictEqual(a.status, 200);
+  assert.ok(OAuth.redirectMatches('http://localhost/cb', 'http://localhost:4567/cb'), 'loopback port may change');
+  assert.ok(!OAuth.redirectMatches('https://a.example/cb', 'https://a.example/cb2'));
+});
+
+test('server: exposed mode keeps the settings page private and the public port narrow', async () => {
+  const port = await freePort(), pub = await freePort(), dir = tmp('exp');
+  // an exposed install as it would be saved (PIN 2468, public address set)
+  const salt = crypto.randomBytes(16);
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ controlPinHash: 'scrypt:' + salt.toString('hex') + ':' + crypto.scryptSync('2468', salt, 32).toString('hex'), publicUrl: 'https://hc.example.com', security: { mode: 'exposed' }, setup: { completed: true, marks: {} } }));
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(pub), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  delete env.HOMECLAUDE_TEST_INSECURE_PUBLIC;
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const H = (extra) => Object.assign({ 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.9', 'x-forwarded-host': 'hc.example.com' }, extra || {});
+  try {
+    for (let i = 0; i < 50 && !/Public port/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    // the private port refuses anything that came through a proxy
+    assert.strictEqual((await req(port, 'GET', '/', undefined, { 'x-forwarded-for': '203.0.113.9' })).status, 403);
+    assert.strictEqual((await req(port, 'GET', '/api/state')).status, 200, 'still fine from this network');
+    const page = await fetch('http://127.0.0.1:' + port + '/');
+    assert.ok(/script-src 'sha256-/.test(page.headers.get('content-security-policy')) && !/unsafe-inline'[^;]*script/.test(page.headers.get('content-security-policy')), 'strict CSP on the page');
+    // the public port: nothing of the settings page, https and the right host only
+    assert.strictEqual((await req(pub, 'GET', '/', undefined, H())).status, 404);
+    assert.strictEqual((await req(pub, 'GET', '/api/state', undefined, H())).status, 404);
+    assert.strictEqual((await req(pub, 'POST', '/api/access', { enabled: true }, H())).status, 404);
+    assert.strictEqual((await req(pub, 'GET', '/.well-known/oauth-protected-resource', undefined, H({ 'x-forwarded-proto': 'http' }))).status, 403, 'https only');
+    assert.strictEqual((await req(pub, 'GET', '/.well-known/oauth-protected-resource', undefined, H({ 'x-forwarded-host': 'evil.example' }))).status, 421, 'right host only');
+    const prm = await req(pub, 'GET', '/.well-known/oauth-protected-resource', undefined, H());
+    assert.strictEqual(prm.j.resource, 'https://hc.example.com/mcp');
+    const r401 = await fetch('http://127.0.0.1:' + pub + '/mcp', { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: '{}' });
+    assert.strictEqual(r401.status, 401);
+    assert.ok(/resource_metadata="https:\/\/hc\.example\.com\/\.well-known\/oauth-protected-resource"/.test(r401.headers.get('www-authenticate')));
+    assert.ok(r401.headers.get('strict-transport-security'));
+    // the plain access token does not work from outside unless allowed
+    const tok = (await req(port, 'POST', '/api/token', {}, { 'x-pin': '2468' })).j.token;
+    const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } } };
+    assert.strictEqual((await req(pub, 'POST', '/mcp', init, H({ authorization: 'Bearer ' + tok }))).status, 401);
+    assert.strictEqual((await req(pub, 'POST', '/mcp/' + tok, init, H())).status, 404, 'no token-in-the-address on the public port');
+    // wrong tokens get an address locked out
+    for (let i = 0; i < 10; i++) await req(pub, 'POST', '/mcp', init, H({ 'x-forwarded-for': '198.51.100.7', authorization: 'Bearer hca_guess' + i }));
+    assert.strictEqual((await req(pub, 'GET', '/.well-known/oauth-protected-resource', undefined, H({ 'x-forwarded-for': '198.51.100.7' }))).status, 429);
+    assert.strictEqual((await req(pub, 'GET', '/.well-known/oauth-protected-resource', undefined, H({ 'x-forwarded-for': '198.51.100.8' }))).status, 200, 'others unaffected');
+    // PIN guessing locks out too
+    for (let i = 0; i < 5; i++) await req(port, 'POST', '/api/access', { enabled: true }, { 'x-pin': '000' + i });
+    assert.strictEqual((await req(port, 'POST', '/api/access', { enabled: true }, { 'x-pin': '2468' })).status, 429, 'locked even with the right PIN');
+    // events recorded, local mode switches the public port off
+    const st = (await req(port, 'GET', '/api/state')).j.security;
+    assert.ok(st.events.some((e) => e.type === 'address-locked') && st.events.some((e) => e.type === 'pin-lockout') && st.events.some((e) => e.type === 'admin-refused'));
+  } finally { proc.kill(); }
+});
+
 test('server: token, origin, access switch, PIN, live Home Assistant settings', async () => {
   const f = await fakeHa();
   const port = await freePort(), dir = tmp('srv');
-  const env = Object.assign({}, process.env, { PORT: String(port), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
   const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
   try {

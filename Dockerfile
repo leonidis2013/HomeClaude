@@ -3,7 +3,8 @@ FROM node:22-alpine
 
 ENV NODE_ENV=production \
     CONFIG=/data/config.json \
-    PORT=8080
+    PORT=8080 \
+    PUBLIC_PORT=8081
 
 # tzdata so times in the activity list and backup names are local
 RUN apk add --no-cache tzdata
@@ -17,7 +18,8 @@ COPY public ./public
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data
-EXPOSE 8080
+# 8080: settings page and Claude Code on your network. 8081: the public port for a reverse proxy (exposed mode only)
+EXPOSE 8080 8081
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/api/state').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

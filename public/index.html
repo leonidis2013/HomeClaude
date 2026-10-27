@@ -234,6 +234,23 @@
   ol.steps li { margin:4px 0; } ol.steps b { color:var(--fg); font-weight:600; }
   .sub2 { font-weight:700; font-size:13px; margin:14px 0 2px; }
   .sub2:first-of-type { margin-top:4px; }
+  /* ===== exposed mode: approvals, connections, events ===== */
+  #approvals:empty { display:none; }
+  #approvals { display:flex; flex-direction:column; gap:10px; margin-bottom:14px; }
+  .appr { background:var(--card); border:1px solid var(--warn); border-left:4px solid var(--warn); border-radius:12px; padding:14px; box-shadow:0 6px 24px var(--shadow); max-width:900px; }
+  .appr .ah { display:flex; gap:8px; align-items:center; font-weight:700; }
+  .appr .ah .tm { margin-left:auto; font-weight:400; font-size:12px; color:var(--dim); }
+  .appr .ab { display:flex; gap:16px; align-items:center; margin:10px 0; flex-wrap:wrap; }
+  .acode { font:700 28px/1 var(--mono); letter-spacing:.12em; background:var(--card2); border:1px solid var(--line); border-radius:9px; padding:10px 14px; }
+  .appr .ai2 { flex:1; min-width:200px; font-size:13px; color:var(--dim); } .appr .ai2 b { color:var(--fg); display:block; font-size:14px; }
+  .appr .af { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .appr .af .sp { flex:1; }
+  .conn { display:flex; gap:12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .conn:first-child { border-top:0; } .conn .ci { flex:1; min-width:200px; } .conn .ci b { display:block; } .conn .ci span { font-size:12px; color:var(--dim); }
+  .chk { display:flex; gap:9px; align-items:flex-start; padding:6px 0; font-size:13px; }
+  .chk .ck { width:18px; height:18px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; background:var(--card2); color:var(--dim); margin-top:1px; }
+  .chk.ok .ck { background:var(--ok); color:var(--onacc); } .chk.bad .ck { background:var(--bad); color:#fff; }
+  .chk span small { display:block; color:var(--dim); font-size:12px; }
+  .ev .dot { margin-top:2px; }
   /* ===== setup guide: steps with their status down the left, one step at a time on the right ===== */
   .side.wside { width:236px; flex:0 0 236px; gap:2px; }
   .wzs { display:flex; align-items:flex-start; gap:10px; text-align:left; padding:8px 10px; position:relative; }
@@ -302,6 +319,7 @@
 <div class="offbar"><span class="spin"></span>Lost connection to HomeClaude. Retrying…</div>
 
 <div id="app">
+<div id="approvals"></div>
 <section id="tab-main">
   <div id="alerts"></div>
   <div class="devs">
@@ -343,6 +361,7 @@
     <button data-sub="ha" class="on"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6"/></svg><span>Home Assistant</span></button>
     <button data-sub="claude"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Connect Claude</span></button>
     <button data-sub="perm"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span>Permissions</span></button>
+    <button data-sub="security"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg><span>Security</span></button>
     <button data-sub="backups"><svg viewBox="0 0 24 24"><path d="M21 8v12H3V8M1 3h22v5H1zM10 12h4"/></svg><span>Backups</span></button>
     <button data-sub="activity"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></button>
     <button data-sub="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg><span>Settings</span></button>
@@ -383,18 +402,7 @@
       </div>
       <div class="card">
         <h2>claude.ai, Claude Desktop and the phone app</h2>
-        <div class="note">These connect from Anthropic's servers, not from your device, so they need an <b>https</b> address that reaches this container from the internet, for example a Cloudflare Tunnel or your reverse proxy pointing at port <span id="portVal"></span>. Without one, use Claude Code above.</div>
-        <div class="set"><div class="sl"><b>Public address</b><span>The https address that forwards to HomeClaude</span></div><div class="sc"><input id="pubUrl" class="txt wide" placeholder="https://homeclaude.example.com" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Public address"><button id="pubSave" class="on">Save</button></div></div>
-        <div class="sub2">Remote MCP server URL</div>
-        <div class="copyrow"><pre class="cmd dim" id="cmdUrl">Save a public address first</pre><button data-copy="cmdUrl">Copy</button></div>
-        <div class="sub2">Request header</div>
-        <div class="copyrow"><pre class="cmd dim" id="cmdHdr">Show the token first</pre><button data-copy="cmdHdr">Copy</button></div>
-        <ol class="steps">
-          <li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>.</li>
-          <li>Name it <b>HomeClaude</b> and paste the URL. Under Authentication choose <b>No sign in</b>.</li>
-          <li>Under <b>Request headers</b> add the header above (name <code>Authorization</code>, value <code>Bearer …</code>), then <b>Add</b>. Claude Desktop and the phone app use the same connector.</li>
-        </ol>
-        <div class="note" style="margin-top:6px">If a Claude app has no place for headers, the URL <code>/mcp/&lt;token&gt;</code> also works (the token is then part of the address).</div>
+        <div id="webConn"></div>
       </div>
     </div>
 
@@ -418,6 +426,34 @@
       <div class="card">
         <h2>Tools Claude sees</h2>
         <div id="toolList"></div>
+      </div>
+    </div>
+
+    <div data-pane="security" class="hide">
+      <div class="note pnote"><b>Local only:</b> HomeClaude answers only on your network. <b>Exposed:</b> claude.ai and the Claude phone app can reach it through your reverse proxy. Claude signs in, you approve each connection here at home, and this page stays private.</div>
+      <div class="card">
+        <h2>Mode</h2>
+        <div class="set first"><div class="sl"><b>Where Claude can reach HomeClaude</b><span id="secModeNote"></span></div><div class="sc"><div class="seg" id="secMode"><button data-v="local">Local only</button><button data-v="exposed">Exposed</button></div></div></div>
+        <div id="secReq"></div>
+      </div>
+      <div class="card">
+        <h2>Public address</h2>
+        <div class="set first"><div class="sl"><b>Address</b><span>The https address your reverse proxy answers on, with nothing after the host name</span></div><div class="sc"><input id="secPub" class="txt wide" placeholder="https://homeclaude.example.com" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Public address"><button id="secPubSave" class="on">Save</button></div></div>
+        <div class="set"><div class="sl"><b>Check the proxy</b><span>HomeClaude calls its own public address to confirm it reaches the public port, and that this page and its settings cannot be reached from outside</span></div><div class="sc"><button id="secTest">Test</button></div></div>
+        <div id="secTestOut"></div>
+      </div>
+      <div class="card"><h2>Reverse proxy</h2><div id="secProxy"></div></div>
+      <div class="card"><h2>Connections from outside</h2><div id="secConns"></div>
+        <div class="set"><div class="sl"><span>Revoking cuts a connection off at once. Claude has to sign in again, and you approve it again.</span></div><div class="sc"><button id="secRevokeAll" class="danger">Revoke all</button></div></div>
+      </div>
+      <div class="card">
+        <h2>Access token from outside</h2>
+        <div class="set first"><div class="sl"><b>Accept the access token over the public address</b><span>Off (recommended): only signed-in, approved connections work from outside. On: apps that send the token as a header work too, with the permission below</span></div><div class="sc"><div class="seg" id="secTokRemote"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set"><div class="sl"><b>The token may</b><span>Never more than Permissions allows; deleting and restarting never work from outside</span></div><div class="sc"><div class="seg" id="secTokScope"><button data-v="read">Look only</button><button data-v="build">Help build</button><button data-v="hands">Hands on</button></div></div></div>
+      </div>
+      <div class="card"><h2>Encryption</h2><div id="secKey"></div></div>
+      <div class="card"><h2>Security events</h2><div class="alist" id="secEvents"></div>
+        <div class="set"><div class="sl"></div><div class="sc"><button id="secClear" class="danger">Clear</button></div></div>
       </div>
     </div>
 
@@ -482,7 +518,7 @@
   function when(t) { var d = new Date(t); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
 
   // ---------- saved on this device ----------
-  var SUBS = ['ha', 'claude', 'perm', 'backups', 'activity', 'settings'];
+  var SUBS = ['ha', 'claude', 'perm', 'security', 'backups', 'activity', 'settings'];
   var themePref = 'auto', subPane = 'ha';
   try { themePref = localStorage.getItem('hc-theme') || 'auto'; } catch (e) {}
   try { subPane = localStorage.getItem('hc-sub') || 'ha'; } catch (e) {}
@@ -492,7 +528,7 @@
   // ---------- state ----------
   var snap = null, lastMsg = 0, pin = '', inSetup = false, inWizard = false, token = '';
   try { pin = sessionStorage.getItem('hc-pin') || ''; } catch (e) {}
-  var haLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null;
+  var haLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null, apSig = '', apScope = {}, connSig = '';
 
   var toastEl = $('#toast'), toastTimer;
   function toast(msg, good) {
@@ -554,11 +590,24 @@
   function codeCmd(t) { return 'claude mcp add --transport http homeclaude ' + mcpBase() + '/mcp --header "Authorization: Bearer ' + t + '"'; }
   function connUrl() { return snap && snap.publicUrl ? snap.publicUrl + '/mcp' : ''; }
   function hdr(t) { return 'Authorization: Bearer ' + t; }
+  /** How to add HomeClaude to claude.ai and the phone app; depends on the mode. */
+  function webSteps(s, pre) {
+    var sec = s.security || {}, u = connUrl();
+    if (sec.mode !== 'exposed' || !u) {
+      return '<p class="note" style="margin:0 0 8px">claude.ai, Claude Desktop and the phone app connect from Anthropic\'s servers, not from your device, so HomeClaude has to be reachable from the internet. That is <b>exposed mode</b>: a reverse proxy (such as a Cloudflare Tunnel) in front of HomeClaude\'s public port, with Claude signing in and you approving each connection here.</p>' +
+        '<button class="on" data-gosec>Set up exposed mode</button>';
+    }
+    return '<ol class="steps"><li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>. Name it <b>HomeClaude</b>.</li><li>Paste this URL:</li></ol>' +
+      '<div class="copyrow"><pre class="cmd" id="' + pre + 'Url">' + esc(u) + '</pre><button data-copy="' + pre + 'Url">Copy</button></div>' +
+      '<ol class="steps" start="3"><li>Leave Authentication on its default sign-in, and choose <b>Add</b>, then <b>Connect</b>.</li>' +
+      '<li>A HomeClaude page opens with a code like <b>K7Q-2XM</b>. An approval with the same code appears at the top of this page. Check the codes match, choose what Claude may do, and approve.</li>' +
+      '<li>The connector then works in Claude Desktop and the phone app too.</li></ol>' +
+      (sec.allowTokenRemote ? '<div class="note" style="margin-top:8px">Access token from outside is on, so an app can also use <b>No sign in</b> with the request header <code>Authorization: Bearer &lt;token&gt;</code>.</div>' : '');
+  }
+  document.addEventListener('click', function (e) { if (e.target.closest('[data-gosec]')) { closeModal(); if (inWizard) closeWizard(); showTab(true); showSub('security'); } });
   function fillConnect(root) {
-    var a = $('#cmdCode', root), b = $('#cmdUrl', root), c = $('#cmdHdr', root);
+    var a = $('#cmdCode', root);
     if (a) { a.textContent = token ? codeCmd(token) : 'Show the token first'; a.classList.toggle('dim', !token); }
-    if (b) { var u = connUrl(); b.textContent = u || 'Save a public https address first'; b.classList.toggle('dim', !u); }
-    if (c) { c.textContent = token ? hdr(token) : 'Show the token first'; c.classList.toggle('dim', !token); }
     var n = $('#tokNote');
     if (n) n.textContent = token ? 'Shown below. It stays on this page until you reload' : 'Hidden. Show it to copy the connection details below';
   }
@@ -580,14 +629,10 @@
   function openConnect() {
     getToken().then(function (t) {
       if (!t) return;
-      var u = connUrl();
       var m = openModal('<div class="mh">Connect Claude</div><div class="mb">' +
         '<div class="sub2">Claude Code on a computer on this network</div><div class="note">Run once in Terminal:</div>' +
         '<div class="copyrow"><pre class="cmd" id="cmdCode">' + esc(codeCmd(t)) + '</pre><button data-copy="cmdCode">Copy</button></div>' +
-        '<div class="sub2">claude.ai, Claude Desktop and the phone app</div>' +
-        (u ? '<div class="note">Customize &gt; Connectors &gt; + Add &gt; Add custom connector. Authentication: No sign in. URL:</div><div class="copyrow"><pre class="cmd" id="cmdUrl">' + esc(u) + '</pre><button data-copy="cmdUrl">Copy</button></div>' +
-             '<div class="note" style="margin-top:6px">Request header:</div><div class="copyrow"><pre class="cmd" id="cmdHdr">' + esc(hdr(t)) + '</pre><button data-copy="cmdHdr">Copy</button></div>'
-           : '<div class="note">These connect from Anthropic\'s servers, so they need a public https address that reaches HomeClaude. Set it under Settings &gt; Connect Claude, or use Claude Code.</div>') +
+        '<div class="sub2">claude.ai, Claude Desktop and the phone app</div>' + webSteps(snap, 'm') +
         '<div class="sub2">Try it</div><div class="note">Ask Claude: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></div>' +
         '</div><div class="mf"><button id="mMore">More options</button><span class="sp"></span><button id="mClose" class="on">Done</button></div>', true);
       $('#mClose', m).onclick = closeModal;
@@ -608,7 +653,7 @@
   function actRows(list, max) {
     if (!list.length) return '<div class="note" style="padding:12px 0">Nothing yet. When Claude uses HomeClaude, every request shows up here.</div>';
     return list.slice(0, max).map(function (a) {
-      return '<div class="arow"><span class="dot ' + (a.ok ? 'ok' : 'bad') + '"></span><div class="an"><b>' + esc(a.tool) + '</b>' + (a.args ? '<span title="' + esc(a.args) + '">' + esc(a.args) + '</span>' : '') +
+      return '<div class="arow"><span class="dot ' + (a.ok ? 'ok' : 'bad') + '"></span><div class="an"><b>' + esc(a.tool) + '</b>' + (a.who ? ' <small style="color:var(--dim)">' + esc(a.who) + (a.remote ? ' · outside' : '') + '</small>' : '') + (a.args ? '<span title="' + esc(a.args) + '">' + esc(a.args) + '</span>' : '') +
         (a.error ? '<span class="aerr">' + esc(a.error) + '</span>' : '') + '</div><div class="aw">' + esc(ago(a.t)) + (a.ms ? ' · ' + a.ms + ' ms' : '') + (a.write ? '<span class="chip w">change</span>' : '') + '</div></div>';
     }).join('');
   }
@@ -622,6 +667,9 @@
     var mt = modeText(a);
     out.push('<span class="st ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"><span class="dot ' + (!a.enabled ? 'bad' : mt === 'Read only' ? 'ok' : 'warn') + '"></span>Claude: ' + esc(mt) + '</span>');
     if (s.lastCallAt) out.push('<span class="st"><span class="dot acc"></span>Last request ' + esc(ago(s.lastCallAt)) + '</span>');
+    var sec = s.security || {};
+    if (sec.mode === 'exposed') out.push('<span class="st warn"><span class="dot warn"></span>Exposed</span>');
+    if (sec.pending && sec.pending.length) out.push('<span class="st warn"><span class="dot warn"></span>' + plural(sec.pending.length, 'approval') + ' waiting</span>');
     if (s.update && s.update.available) out.push('<span class="st warn">Update ' + esc(s.update.latest) + ' available</span>');
     var h = s.health;
     if (h && h.level === 'bad') out.push('<span class="st bad"><span class="dot bad"></span>' + (h.storage.level === 'bad' ? 'Storage problem' : 'System problem') + '</span>');
@@ -687,6 +735,8 @@
     rr += row('Changes', chips(PERMS.map(function (p) { return [p[1], a[p[0]] ? 'w' : '']; })));
     rr += row('Blocked', a.blocked.length ? chips(a.blocked.map(function (d) { return [d, 'b']; })) : '<span class="up">Nothing blocked</span>');
     rr += row('Tools', on + ' of ' + (s.tools || []).length);
+    var sc = s.security || {};
+    rr += row('Outside', sc.mode === 'exposed' ? '<span class="warn2">Exposed</span> · ' + plural((sc.connections || []).length, 'connection') : 'Local only');
     $('#accRows').innerHTML = rr;
     $('#accWhen').textContent = s.lastCallAt ? 'Last request ' + ago(s.lastCallAt) : 'No requests yet';
 
@@ -703,9 +753,10 @@
     $('#haStat').innerHTML = !st.configured ? 'Not set up yet' : st.checking ? 'Checking…' : st.ok ? '<span style="color:var(--ok)">Connected to Home Assistant ' + esc(st.version) + (st.name ? ' (' + esc(st.name) + ')' : '') + '</span>' : '<span style="color:var(--bad)">' + esc(st.error || 'Not reachable') + '</span>';
     $('#haUrl').disabled = $('#haTok').disabled = $('#haSave').disabled = !!s.demo;
     // Claude pane
-    if (!pubLoaded) { $('#pubUrl').value = s.publicUrl || ''; pubLoaded = true; }
-    $('#portVal').textContent = location.port || (location.protocol === 'https:' ? '443' : '80');
+    var wsig = (s.security && s.security.mode) + s.publicUrl + (s.security && s.security.allowTokenRemote);
+    if ($('#webConn').dataset.sig !== wsig) { $('#webConn').dataset.sig = wsig; $('#webConn').innerHTML = webSteps(s, 'w'); }
     fillConnect(document);
+    renderSecurity(s);
     // permissions
     paintSeg($('#pEnabled'), a.enabled ? '1' : '0');
     $$('[data-perm]').forEach(function (el) { paintSeg(el, a[el.dataset.perm] ? '1' : '0'); });
@@ -736,8 +787,116 @@
     snap = s; lastMsg = Date.now();
     document.body.classList.remove('offline');
     renderHeader(s);
+    renderApprovals(s);
     if (inWizard) renderWizard(s); else if (inSetup) updateSettings(s); else renderMain(s);
   }
+
+  // ---------- exposed mode: approvals, connections, events ----------
+  var SCOPES = [['read', 'Look only'], ['build', 'Help build'], ['hands', 'Hands on']];
+  function scopeSeg(attr, id, cur) { return '<div class="seg" ' + attr + '="' + esc(id) + '">' + SCOPES.map(function (x) { return '<button data-v="' + x[0] + '"' + (cur === x[0] ? ' class="on"' : '') + '>' + x[1] + '</button>'; }).join('') + '</div>'; }
+  function renderApprovals(s) {
+    var list = (s.security && s.security.pending) || [];
+    var sig = list.map(function (p) { return p.id + (apScope[p.id] || 'read'); }).join('|');
+    if (sig === apSig) { list.forEach(function (p) { var t = $('[data-tm="' + p.id + '"]'); if (t) t.textContent = 'expires in ' + Math.max(1, Math.round((p.expiresAt - Date.now()) / 60000)) + ' min'; }); return; }
+    apSig = sig;
+    $('#approvals').innerHTML = list.map(function (p) {
+      var sc = apScope[p.id] || 'read';
+      return '<div class="appr"><div class="ah"><span class="dot warn"></span>Claude wants to connect from outside<span class="tm" data-tm="' + esc(p.id) + '">expires in ' + Math.max(1, Math.round((p.expiresAt - Date.now()) / 60000)) + ' min</span></div>' +
+        '<div class="ab"><div class="acode">' + esc(p.code) + '</div><div class="ai2"><b>' + esc(p.client) + '</b>' + (p.clientHost ? esc(p.clientHost) + ' · ' : '') + 'from ' + esc(p.ip) + ' · ' + esc(ago(p.createdAt)) +
+        '<br>Approve only if the sign-in page you just opened shows this same code.</div></div>' +
+        '<div class="af"><span class="note">It may</span>' + scopeSeg('data-aps', p.id, sc) + '<span class="sp"></span><button data-deny="' + esc(p.id) + '">Deny</button><button class="on" data-approve="' + esc(p.id) + '">Approve</button></div></div>';
+    }).join('');
+    $$('[data-aps]').forEach(function (g) { $$('button', g).forEach(function (b) { b.onclick = function () { apScope[g.dataset.aps] = b.dataset.v; apSig = ''; renderApprovals(snap); }; }); });
+    $$('[data-approve]').forEach(function (b) { b.onclick = function () { decide(b.dataset.approve, true); }; });
+    $$('[data-deny]').forEach(function (b) { b.onclick = function () { decide(b.dataset.deny, false); }; });
+  }
+  function decide(id, yes) {
+    var sc = apScope[id] || 'read';
+    var go = function () { api('api/connections/decide', { id: id, approve: yes, scope: sc }).then(function (j) { report(j, 'Could not do that'); if (j.ok) { apSig = ''; toast(yes ? 'Approved. Claude is signing in' : 'Denied', yes); } }); };
+    if (yes && sc === 'hands') confirmBox('Let this connection act on the home?', '<p>Claude, from outside your home, will be able to run services (within Permissions). Blocked domains stay blocked.</p>', 'Approve').then(function (y) { if (y) go(); });
+    else go();
+  }
+
+  var EV = {
+    'connection-requested': ['Claude asked to connect', 'acc'], 'connection-approved': ['Connection approved', 'ok'], 'connection-denied': ['Connection denied', ''],
+    'connection-created': ['Connection signed in', 'ok'], 'connection-revoked': ['Connection revoked', 'warn'], 'connection-changed': ['Connection permission changed', ''],
+    'client-registered': ['An app registered for sign-in', ''], 'client-metadata-failed': ['Could not read an app\'s details', 'warn'],
+    'address-locked': ['Address locked out after failed attempts', 'bad'], 'public-paused': ['Sign-in from outside paused: many failures', 'bad'],
+    'pin-lockout': ['Too many wrong PINs', 'bad'], 'admin-refused': ['Blocked a request to the settings port', 'bad'],
+    'mode-changed': ['Mode changed', 'warn'], 'token-remote': ['Access token from outside changed', 'warn'], 'token-replaced': ['New access token made', '']
+  };
+  function evDetail(e) {
+    var bits = [];
+    if (e.client) bits.push(e.client); if (e.code) bits.push('code ' + e.code); if (e.scope) bits.push((SCOPES.filter(function (x) { return x[0] === e.scope; })[0] || [0, e.scope])[1]);
+    if (e.mode) bits.push(e.mode === 'exposed' ? 'Exposed' : 'Local only'); if (e.allowed != null) bits.push(e.allowed ? 'On' : 'Off');
+    if (e.ip) bits.push('from ' + e.ip); if (e.why) bits.push(e.why); if (e.path) bits.push(e.path); if (e.error) bits.push(e.error);
+    return bits.join(' · ');
+  }
+  function chk(ok, title, note) { return '<div class="chk ' + (ok === true ? 'ok' : ok === false ? 'bad' : '') + '"><span class="ck">' + (ok === true ? '✓' : ok === false ? '!' : '·') + '</span><span>' + title + (note ? '<small>' + note + '</small>' : '') + '</span></div>'; }
+
+  function renderSecurity(s) {
+    var sec = s.security || {}, ex = sec.mode === 'exposed';
+    paintSeg($('#secMode'), sec.mode);
+    $('#secModeNote').textContent = ex ? 'Claude can reach HomeClaude from outside through your reverse proxy. This page only opens from your home network.' : 'Only devices on your network can reach HomeClaude. The public port answers nothing.';
+    var t = sec.selfTest;
+    $('#secReq').innerHTML = chk(!!s.pinRequired, 'Control PIN is set', s.pinRequired ? '' : 'Needed before exposing: Settings > Settings > Control') +
+      chk(!!sec.publicUrl, 'Public address is set', sec.publicUrl || 'Enter it below') +
+      chk(t ? t.ok : null, 'Proxy check', t ? (t.ok ? 'Passed ' + ago(t.at) : 'Did not pass. See the results below') : 'Not run yet');
+    if (!pubLoaded) { $('#secPub').value = sec.publicUrl || ''; pubLoaded = true; }
+    $('#secTestOut').innerHTML = t ? (t.checks || []).map(function (c) { return chk(c.ok, esc(c.name), esc(c.detail)); }).join('') + (t.error ? '<div class="errbox">' + esc(t.error) + '</div>' : '') : '';
+    var host = location.hostname;
+    $('#secProxy').innerHTML = '<p class="note" style="margin:0 0 8px">HomeClaude listens on two ports. Forward <b>only the public one</b>.</p>' +
+      chk(true, 'Public port: container port <code>' + esc(sec.publicPort) + '</code>', 'In HomeClaude\'s TrueNAS YAML it is published as <b>9086</b>. Point the proxy here: <code>http://' + esc(host) + ':9086</code>') +
+      chk(false, 'Settings port: container port <code>' + esc(sec.adminPort) + '</code> (9085)', 'Never forward this one. In exposed mode it refuses anything that comes through a proxy anyway.') +
+      '<ol class="steps"><li><b>Cloudflare Tunnel:</b> add a public hostname (for example <code>homeclaude.yourdomain.com</code>) with service <code>http://' + esc(host) + ':9086</code>.</li>' +
+      '<li><b>Nginx Proxy Manager, Caddy or Traefik:</b> a proxy host for that name, forwarding to <code>' + esc(host) + ':9086</code>, with an https certificate.</li>' +
+      '<li>Keep the host name and send <code>X-Forwarded-Proto: https</code> (all of these do by default). HomeClaude refuses plain http and other host names.</li></ol>';
+    var cs = JSON.stringify(sec.connections || []);
+    if (cs !== connSig) {
+      connSig = cs;
+      $('#secConns').innerHTML = (sec.connections || []).length ? sec.connections.map(function (c) {
+        return '<div class="conn"><div class="ci"><b>' + esc(c.client) + '</b><span>Signed in ' + esc(when(c.createdAt)) + ' · ' + (c.lastUsedAt ? 'last used ' + esc(ago(c.lastUsedAt)) + (c.lastIp ? ' from ' + esc(c.lastIp) : '') : 'not used yet') + ' · ' + plural(c.uses, 'request') + '</span></div>' +
+          scopeSeg('data-cscope', c.id, c.scope) + '<button class="danger" data-revoke="' + esc(c.id) + '">Revoke</button></div>';
+      }).join('') : '<div class="note">' + (ex ? 'None yet. When Claude signs in from outside and you approve it, it shows up here.' : 'None. Connections from outside need exposed mode.') + '</div>';
+      $$('[data-cscope]').forEach(function (g) { $$('button', g).forEach(function (b) { b.onclick = function () { api('api/connections/scope', { id: g.dataset.cscope, scope: b.dataset.v }).then(function (j) { report(j, 'Could not change it'); connSig = ''; }); }; }); });
+      $$('[data-revoke]').forEach(function (b) { b.onclick = function () { confirmBox('Revoke this connection?', '<p>It stops working at once. Claude has to sign in again, and you approve it again.</p>', 'Revoke', true).then(function (y) { if (y) api('api/connections/revoke', { id: b.dataset.revoke }).then(function (j) { report(j, 'Could not revoke'); connSig = ''; }); }); }; });
+    }
+    $('#secRevokeAll').disabled = !(sec.connections || []).length;
+    paintSeg($('#secTokRemote'), sec.allowTokenRemote ? '1' : '0');
+    paintSeg($('#secTokScope'), sec.tokenScope);
+    $('#secKey').innerHTML = (sec.keyMismatch ? '<div class="errbox"><b>The encryption key does not match.</b> The saved tokens were encrypted with a different key. Put back the right HOMECLAUDE_MASTER_KEY, or enter the Home Assistant token again.</div>' : '') +
+      chk(true, 'Tokens are encrypted at rest (AES-256-GCM)', 'The Home Assistant token and Claude\'s access token. Sign-in tokens are stored only as hashes, never readable.') +
+      (sec.keyWhere === 'master' ? chk(true, 'The key comes from the app\'s environment', 'HOMECLAUDE_MASTER_KEY is set, and no key is stored on the data volume. A copy of the volume alone cannot be decrypted.')
+        : chk(null, 'The key is stored on the data volume', 'Anyone with a copy of the whole volume could decrypt the tokens. To keep the key off it, add an environment variable <code>HOMECLAUDE_MASTER_KEY</code> with a long random value to the app\'s YAML. HomeClaude moves the tokens over and deletes the key file.')) +
+      chk(true, 'Traffic from outside is https only', 'Your reverse proxy holds the certificate; HomeClaude refuses anything that did not arrive over https.');
+    $('#secEvents').innerHTML = (sec.events || []).length ? sec.events.map(function (e) {
+      var d = EV[e.type] || [e.type, ''];
+      return '<div class="arow ev"><span class="dot ' + d[1] + '"></span><div class="an"><b style="font-family:inherit">' + esc(d[0]) + '</b><span style="font-family:inherit;white-space:normal">' + esc(evDetail(e)) + '</span></div><div class="aw">' + esc(ago(e.t)) + '</div></div>';
+    }).join('') : '<div class="note" style="padding:10px 0">Nothing yet.</div>';
+  }
+
+  $$('#secMode button').forEach(function (b) {
+    b.onclick = function () {
+      var v = b.dataset.v;
+      if (v === snap.security.mode) return;
+      var go = function () { api('api/security', { mode: v }).then(function (j) { report(j, 'Could not change the mode'); if (j.ok) toast(v === 'exposed' ? 'Exposed mode is on' : 'Local only. The public port answers nothing now', true); }); };
+      if (v === 'exposed') confirmBox('Turn on exposed mode?', '<p>HomeClaude\'s public port starts answering Claude\'s sign-in and /mcp, for the reverse proxy to forward. This settings page stays reachable only from your home network.</p><p>Point the proxy at the <b>public port (9086)</b>, never at 9085.</p>', 'Turn on').then(function (y) { if (y) go(); });
+      else go();
+    };
+  });
+  $('#secPubSave').onclick = function () { api('api/settings', { publicUrl: $('#secPub').value.trim() }).then(function (j) { report(j, 'Could not save'); if (j.ok) { pubLoaded = false; toast('Saved', true); } }); };
+  $('#secTest').onclick = function () { var b = this; b.disabled = true; b.textContent = 'Testing…'; api('api/security/selftest', {}).then(function (j) { b.disabled = false; b.textContent = 'Test'; report(j, 'Could not test'); }); };
+  $$('#secTokRemote button').forEach(function (b) {
+    b.onclick = function () {
+      var on = b.dataset.v === '1';
+      var go = function () { api('api/security', { allowTokenRemote: on }).then(function (j) { report(j, 'Could not save'); }); };
+      if (on) confirmBox('Accept the access token from outside?', '<p>Anyone who gets hold of the token could then use HomeClaude from the internet, with the permission you choose, without approval at home. Sign-in with approval is safer.</p>', 'Accept it', true).then(function (y) { if (y) go(); });
+      else go();
+    };
+  });
+  $$('#secTokScope button').forEach(function (b) { b.onclick = function () { api('api/security', { tokenScope: b.dataset.v }).then(function (j) { report(j, 'Could not save'); }); }; });
+  $('#secRevokeAll').onclick = function () { confirmBox('Revoke all connections from outside?', '<p>Every Claude app signed in from outside stops working at once and has to sign in and be approved again.</p>', 'Revoke all', true).then(function (y) { if (y) api('api/connections/revoke', { all: true }).then(function (j) { report(j, 'Could not revoke'); connSig = ''; }); }); };
+  $('#secClear').onclick = function () { confirmBox('Clear the security events?', '<p>Only this list is emptied.</p>', 'Clear', true).then(function (y) { if (y) api('api/security/clear', {}); }); };
 
   // ---------- backups ----------
   function loadBackups() {
@@ -817,9 +976,7 @@
       api('api/token', { regenerate: true }).then(function (j) { report(j, 'Could not make a new token'); if (j.ok) { token = j.token; fillConnect(document); toast('New token made', true); } });
     });
   };
-  $('#pubSave').onclick = function () {
-    api('api/settings', { publicUrl: $('#pubUrl').value.trim() }).then(function (j) { report(j, 'Could not save'); if (j.ok) { pubLoaded = false; toast('Saved', true); } });
-  };
+
   $('#actClear').onclick = function () {
     confirmBox('Clear the activity list?', '<p>The list of what Claude asked for is emptied. Home Assistant\'s own logbook is not touched.</p>', 'Clear', true).then(function (y) { if (y) api('api/activity-clear', {}).then(function (j) { report(j, 'Could not clear'); }); });
   };
@@ -973,7 +1130,7 @@
 
   function renderWizard(s) {
     renderWizardSide(s);
-    var w = WZ[wzStep], sig = w.id + '|' + (w.id === 'pin' ? s.pinRequired : '') + '|' + (w.id === 'claude' ? token + s.publicUrl + wzWho + s.everConnected : '') + '|' + (w.id === 'done' ? JSON.stringify(WZ.map(function (x) { return stepState(x.id, s)[0]; })) : '') + '|' + (w.id === 'perms' ? wzPick : '');
+    var w = WZ[wzStep], sig = w.id + '|' + (w.id === 'pin' ? s.pinRequired : '') + '|' + (w.id === 'claude' ? token + s.publicUrl + wzWho + s.everConnected + (s.security && s.security.mode) : '') + '|' + (w.id === 'done' ? JSON.stringify(WZ.map(function (x) { return stepState(x.id, s)[0]; })) : '') + '|' + (w.id === 'perms' ? wzPick : '');
     if (sig !== wzDrawn) { wzDrawn = sig; drawStep(w.id, s); }
     wizardLive(s);
   }
@@ -1089,18 +1246,10 @@
           '<div class="copyrow"><pre class="cmd' + (token ? '' : ' dim') + '" id="cmdCode">' + esc(code) + '</pre><button data-copy="cmdCode">Copy</button></div>' +
           '<ol class="steps" start="3"><li>Start Claude Code with <code>claude</code> and ask: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></li></ol>';
       } else {
-        body += '<p>claude.ai, Claude Desktop and the phone app connect from Anthropic\'s servers, so HomeClaude needs an <b>https</b> address that reaches it from the internet (for example a Cloudflare Tunnel to port ' + esc(location.port || '80') + '). If you do not have one yet, use Claude Code for now.</p>' +
-          '<div class="set first"><div class="sl"><b>Public address</b><span>The https address that forwards to HomeClaude</span></div><div class="sc"><input id="wzPub" class="txt wide" placeholder="https://homeclaude.example.com" spellcheck="false" autocomplete="off" autocapitalize="off" value="' + esc(s.publicUrl || '') + '"><button id="wzPubSave">Save</button></div></div>' +
-          (url ? '<ol class="steps"><li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>. Name it <b>HomeClaude</b>.</li><li>Paste this URL, and under Authentication choose <b>No sign in</b>:</li></ol>' +
-            '<div class="copyrow"><pre class="cmd" id="cmdUrl">' + esc(url) + '</pre><button data-copy="cmdUrl">Copy</button></div>' +
-            '<ol class="steps" start="3"><li>Under <b>Request headers</b> add this, then choose <b>Add</b>:</li></ol>' +
-            '<div class="copyrow"><pre class="cmd' + (token ? '' : ' dim') + '" id="cmdHdr">' + esc(token ? hdr(token) : 'Getting the token…') + '</pre><button data-copy="cmdHdr">Copy</button></div>' +
-            '<ol class="steps" start="4"><li>In a new chat, ask: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></li></ol>' : '');
+        body += webSteps(s, 'z') + (s.security && s.security.mode === 'exposed' && url ? '<ol class="steps" start="6"><li>In a new chat, ask: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></li></ol>' : '');
       }
       pane.innerHTML = head('Connect Claude') + '<div class="wzbody">' + body + '<div id="wzWait"></div></div>' + foot('Next', { alt: s.everConnected ? null : 'Skip for now', disabled: !s.everConnected });
       $$('#wzWho button', pane).forEach(function (b) { b.onclick = function () { wzWho = b.dataset.v; renderWizard(snap); }; });
-      var ps = $('#wzPubSave');
-      if (ps) ps.onclick = function () { api('api/settings', { publicUrl: $('#wzPub').value.trim() }).then(function (j) { report(j, 'Could not save'); }); };
       wire(function () { return mark('claude'); }, function () { mark('claude', 'skip').then(next); });
     }
     if (id === 'done') {
@@ -1142,7 +1291,7 @@
     $$('#sub button').forEach(function (b) { b.classList.toggle('on', b.dataset.sub === name); });
     $$('[data-pane]').forEach(function (p) { p.classList.toggle('hide', p.dataset.pane !== name); });
     if (name === 'ha') haLoaded = false;
-    if (name === 'claude') pubLoaded = false;
+    if (name === 'security') { pubLoaded = false; connSig = ''; }
     if (name === 'perm') blkLoaded = false;
     if (name === 'backups') { bkSig = null; }
     if (name === 'settings') { keepLoaded = false; paintSeg($('#themeSeg'), themePref); }

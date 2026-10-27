@@ -23,6 +23,8 @@ const Guard = require('./lib/guard.js');
 const Mcp = require('./lib/mcp.js');
 const Tools = require('./lib/tools.js');
 const Health = require('./lib/health.js');
+const Net = require('./lib/netsec.js');
+const OAuth = require('./lib/oauth.js');
 const pkg = require('./package.json');
 
 const args = process.argv.slice(2);
@@ -32,6 +34,9 @@ const cfgPath = process.env.CONFIG || path.join(__dirname, 'data', 'config.json'
 const dataDir = path.dirname(path.resolve(cfgPath));
 const statePath = path.join(dataDir, 'state.json');
 const PORT = Number(process.env.PORT || 8080);
+const PUBLIC_PORT = Number(process.env.PUBLIC_PORT || 8081);
+// tests only: lets the public side run on plain http on this machine
+const INSECURE_PUBLIC = process.env.HOMECLAUDE_TEST_INSECURE_PUBLIC === '1';
 const DEMO_TOKEN = 'demo';
 const IN_DOCKER = fs.existsSync('/.dockerenv');
 
@@ -42,6 +47,7 @@ const DEFAULTS = {
   mcpToken: '',
   publicUrl: '',
   backup: { keep: 30 },
+  security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '' },
   setup: { completed: false, marks: {} }
 };
 
@@ -70,7 +76,7 @@ const savedCfg = DEMO ? {} : readJson(cfgPath, {});
 let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), savedCfg);
 // installs from before the setup guide already went through setup
 if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: true, marks: {} };
-['ha', 'access', 'backup', 'setup'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
+['ha', 'access', 'backup', 'setup', 'security'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
 if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
 
@@ -91,6 +97,8 @@ function changeConfig(mutator) {
 
 const state = DEMO ? {} : readJson(statePath, {});
 if (!Array.isArray(state.activity)) state.activity = [];
+if (!Array.isArray(state.security)) state.security = [];
+const oauthPath = path.join(dataDir, 'oauth.json');
 let saveTimer = null;
 function saveState() {
   if (DEMO) return;
@@ -102,7 +110,28 @@ function saveState() {
 }
 
 // ---------- secrets: the Home Assistant token and Claude's access token ----------
-const secrets = Secrets.create(path.join(dataDir, 'secret.key'));
+const secrets = Secrets.create(path.join(dataDir, 'secret.key'), { masterKey: DEMO ? '' : process.env.HOMECLAUDE_MASTER_KEY });
+let keyMismatch = false;
+if (!DEMO) {
+  // a master key from the environment: move everything over to it and delete the key file from the volume
+  const moved = secrets.migrate({ ha: cfg.ha.token, mcp: cfg.mcpToken, check: cfg.security.keyCheck });
+  if (moved) {
+    const r = changeConfig((c) => { c.ha.token = moved.ha; c.mcpToken = moved.mcp; c.security.keyCheck = moved.check; });
+    if (r.ok && secrets.dropFileKey()) console.log('Tokens are now encrypted with the master key; secret.key was removed from the data folder.');
+  }
+  if (!cfg.security.keyCheck) changeConfig((c) => { c.security.keyCheck = secrets.makeCheck(); });
+  else if (!secrets.checkOk(cfg.security.keyCheck)) {
+    keyMismatch = true;
+    console.error('The encryption key does not match the one the saved tokens were encrypted with. Check HOMECLAUDE_MASTER_KEY, or enter the tokens again.');
+  }
+}
+
+// ---------- security events (what happened at the doors) ----------
+function securityEvent(type, detail) {
+  state.security.unshift(Object.assign({ t: Date.now(), type }, detail || {}));
+  if (state.security.length > 300) state.security.length = 300;
+  saveState(); broadcastSoon();
+}
 function mcpToken() {
   if (DEMO) return DEMO_TOKEN;
   let t = secrets.dec(cfg.mcpToken);
@@ -122,6 +151,7 @@ function hashPin(pin) {
   const salt = crypto.randomBytes(16);
   return 'scrypt:' + salt.toString('hex') + ':' + crypto.scryptSync(pin, salt, 32).toString('hex');
 }
+const pinLimit = Net.limiter({ max: 5, windowMs: 10 * 60e3, lockMs: 10 * 60e3 });
 function pinOk(given) {
   if (!pinSet()) return true;
   given = String(given == null ? '' : given);
@@ -187,15 +217,27 @@ function logActivity(entry) {
 function argSummary(a) {
   try { const s = JSON.stringify(a || {}); return s === '{}' ? '' : s.length > 220 ? s.slice(0, 217) + '...' : s; } catch (e) { return ''; }
 }
+/**
+ * What a connection from outside may do: never more than the global settings, never
+ * more than was chosen when it was approved, and never delete or restart.
+ */
+const SCOPE_TEXT = { read: 'Look only', build: 'Help build', hands: 'Hands on' };
+function capAccess(scope) {
+  const a = cfg.access;
+  return { enabled: a.enabled, blocked: a.blocked, edit: !!a.edit && (scope === 'build' || scope === 'hands'), services: !!a.services && scope === 'hands', delete: false, restart: false };
+}
+const callLimit = Net.limiter({ max: 120, windowMs: 60e3, lockMs: 60e3 });
 const mcp = Mcp.create({
   serverInfo: { name: 'homeclaude', title: 'HomeClaude (Home Assistant)', version: pkg.version },
   instructions: Tools.INSTRUCTIONS,
-  listTools: () => tools.list(),
-  async callTool(name, a) {
+  listTools: (who) => tools.list(who && who.access),
+  async callTool(name, a, who) {
     const t0 = Date.now(), def = tools.all().find((x) => x.name === name);
-    const r = await tools.call(name, a);
+    if (who && who.remote && callLimit.locked(who.key)) return { isError: true, text: 'Too many requests from this connection. Wait a minute.' };
+    if (who && who.remote) callLimit.hit(who.key);
+    const r = await tools.call(name, a, who && who.access);
     if (def && def.needs) backupsChanged();
-    logActivity({ t: t0, tool: name, args: argSummary(a), ok: !r.isError, ms: Date.now() - t0, write: !!(def && def.needs), error: r.isError ? r.text.slice(0, 300) : undefined });
+    logActivity({ t: t0, tool: name, args: argSummary(a), ok: !r.isError, ms: Date.now() - t0, write: !!(def && def.needs), error: r.isError ? r.text.slice(0, 300) : undefined, who: who ? who.label : undefined, remote: !!(who && who.remote), ip: who ? who.ip : undefined });
     return r;
   }
 });
@@ -205,14 +247,20 @@ function tokenOk(given) {
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
 
-function serveMcp(req, res, pathToken) {
-  const send = (code, obj, extra) => { res.writeHead(code, Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, extra || {})); res.end(obj == null ? '' : JSON.stringify(obj)); };
+const bearerOf = (req) => (/^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || '')) || [])[1];
+
+/** /mcp on the private port: the access token, from the header or the address. */
+function serveMcpLocal(req, res, pathToken) {
+  const send = (code, obj, extra) => { res.writeHead(code, Net.securityHeaders(Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, extra || {}))); res.end(obj == null ? '' : JSON.stringify(obj)); };
+  if (!tokenOk(pathToken || bearerOf(req))) return setTimeout(() => send(401, { error: 'Missing or wrong HomeClaude access token' }, { 'www-authenticate': 'Bearer realm="HomeClaude"' }), 400);
+  runMcp(req, res, { label: 'This network', access: null, remote: false, ip: Net.clientIp(req, false), key: 'lan' });
+}
+
+function runMcp(req, res, who) {
+  const send = (code, obj, extra) => { res.writeHead(code, Net.securityHeaders(Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, extra || {}))); res.end(obj == null ? '' : JSON.stringify(obj)); };
   // a web page in a browser must not be able to use this (DNS rebinding); Claude's apps send no Origin
   const origin = req.headers.origin;
-  if (origin) { try { if (new URL(origin).host !== req.headers.host) return send(403, { error: 'Requests from web pages are not allowed' }); } catch (e) { return send(403, { error: 'Bad Origin' }); } }
-  const auth = String(req.headers.authorization || '');
-  const given = pathToken || (/^Bearer\s+(.+)$/i.exec(auth) || [])[1];
-  if (!tokenOk(given)) return setTimeout(() => send(401, { error: 'Missing or wrong HomeClaude access token' }, { 'www-authenticate': 'Bearer realm="HomeClaude"' }), 400);
+  if (origin) { try { if (new URL(origin).host !== (req.headers['x-forwarded-host'] || req.headers.host)) return send(403, { error: 'Requests from web pages are not allowed' }); } catch (e) { return send(403, { error: 'Bad Origin' }); } }
   if (req.method === 'GET' || req.method === 'DELETE') return send(405, { error: 'Use POST' }, { allow: 'POST' });
   if (req.method !== 'POST') return send(405, { error: 'Use POST' }, { allow: 'POST' });
   if (!cfg.access.enabled) return send(503, { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Claude access is switched off in HomeClaude' } });
@@ -224,7 +272,7 @@ function serveMcp(req, res, pathToken) {
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { return send(400, Mcp.parseError()); }
     try {
-      const out = await mcp.handle(body, req.headers);
+      const out = await mcp.handle(body, req.headers, who);
       if (out == null) { res.writeHead(202); return res.end(); }
       send(200, out);
     } catch (e) {
@@ -258,6 +306,7 @@ function setAccess(b) {
 
 function changeSettings(b) {
   if (Object.prototype.hasOwnProperty.call(b, 'newPin')) {
+    if (b.newPin === null && exposed()) return { ok: false, error: 'Exposed mode needs a PIN. Switch to local only first.' };
     if (b.newPin === null) return changeConfig((c) => { delete c.controlPinHash; verified.clear(); });
     const p = String(b.newPin);
     if (p.length < 4 || p.length > 64) return { ok: false, error: 'A PIN needs 4 to 64 characters' };
@@ -266,7 +315,8 @@ function changeSettings(b) {
   return changeConfig((c) => {
     if (b.publicUrl != null) {
       const u = clean(b.publicUrl, 300).replace(/\/+$/, '').replace(/\/mcp$/, '');
-      if (u && !/^https:\/\/[^\s/]+(:\d+)?(\/[^\s]*)?$/i.test(u)) return 'The public address must start with https://';
+      if (u && !(INSECURE_PUBLIC ? /^https?:\/\/[^\s/]+(:\d+)?$/i : /^https:\/\/[^\s/]+(:\d+)?$/i).test(u)) return 'The public address must be https://, just the host name (for example https://homeclaude.example.com)';
+      if (u !== c.publicUrl && c.security.mode === 'exposed' && !u) return 'Switch to local mode before removing the public address';
       c.publicUrl = u;
     }
     if (b.backupKeep != null) c.backup.keep = Math.min(200, Math.max(1, parseInt(b.backupKeep, 10) || 30));
@@ -277,6 +327,7 @@ function newToken() {
   if (DEMO) return { ok: false, error: 'Demo mode uses the token "demo"' };
   const t = crypto.randomBytes(24).toString('base64url');
   const r = changeConfig((c) => { c.mcpToken = secrets.enc(t); });
+  if (r.ok) securityEvent('token-replaced', {});
   return r.ok ? { ok: true, token: t } : r;
 }
 
@@ -293,6 +344,77 @@ async function restore(b) {
     logActivity({ t: Date.now(), tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// ---------- exposed mode: Claude's sign-in from outside ----------
+let oauthSaveTimer = null;
+const oauth = OAuth.create({
+  load: () => (DEMO ? {} : readJson(oauthPath, {})),
+  save: (db) => {
+    if (DEMO) return;
+    clearTimeout(oauthSaveTimer);
+    oauthSaveTimer = setTimeout(() => { try { writeJson(oauthPath, db); } catch (e) { lastWriteError = { at: Date.now(), message: e.code || e.message }; runHealth(); } }, 100);
+  },
+  base: () => cfg.publicUrl,
+  event: (type, d) => securityEvent(type, d)
+});
+const exposed = () => cfg.security.mode === 'exposed';
+
+function setSecurity(b) {
+  let changedMode = null;
+  const r = changeConfig((c) => {
+    if (b.mode != null) {
+      if (!['local', 'exposed'].includes(b.mode)) return 'Unknown mode';
+      if (b.mode === 'exposed') {
+        if (!c.controlPinHash) return 'Set a control PIN first. In exposed mode this page must not be open to anyone on your network.';
+        if (!c.publicUrl) return 'Enter the public https address first.';
+      }
+      if (c.security.mode !== b.mode) changedMode = b.mode;
+      c.security.mode = b.mode;
+    }
+    if (typeof b.allowTokenRemote === 'boolean') c.security.allowTokenRemote = b.allowTokenRemote;
+    if (b.tokenScope != null) { if (!OAuth.SCOPES.includes(b.tokenScope)) return 'Unknown permission level'; c.security.tokenScope = b.tokenScope; }
+  });
+  if (r.ok && changedMode) securityEvent('mode-changed', { mode: changedMode });
+  if (r.ok && b.allowTokenRemote != null) securityEvent('token-remote', { allowed: !!b.allowTokenRemote });
+  return r;
+}
+
+/** From inside: can the public address reach the public port, and does it hide this page? */
+let selfTest = null, selfNonce = '';
+async function runSelfTest() {
+  if (!cfg.publicUrl) return { ok: false, error: 'Enter the public address first' };
+  selfNonce = crypto.randomBytes(12).toString('hex');
+  const base = cfg.publicUrl, checks = [];
+  const get = async (p) => { const r = await fetch(base + p, { redirect: 'manual', signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-store' } }); return { status: r.status, text: await r.text() }; };
+  try {
+    const h = await get('/healthz?n=' + selfNonce);
+    let j = null; try { j = JSON.parse(h.text); } catch (e) { /* not ours */ }
+    checks.push({ name: 'The public address reaches HomeClaude\'s public port', ok: !!(j && j.match), detail: j && j.match ? 'Yes' : j && j.mode === 'local' ? 'It reaches HomeClaude, but exposed mode is off' : j ? 'It reaches a different HomeClaude' : 'Got ' + h.status + ' from something else. Point the proxy at port ' + PUBLIC_PORT + ' of this container' });
+    const root = await get('/');
+    checks.push({ name: 'This settings page is not reachable from outside', ok: root.status === 404 && !/<title>HomeClaude<\/title>/.test(root.text), detail: root.status === 404 ? 'Hidden' : 'Got ' + root.status + '. The proxy may point at the private port ' + PORT + ' instead of ' + PUBLIC_PORT });
+    const st = await get('/api/state');
+    checks.push({ name: 'Settings and tokens are not reachable from outside', ok: st.status === 404, detail: st.status === 404 ? 'Hidden' : 'Got ' + st.status });
+    const prm = await get('/.well-known/oauth-protected-resource');
+    let pj = null; try { pj = JSON.parse(prm.text); } catch (e) { /* no */ }
+    checks.push({ name: 'Claude can find the sign-in', ok: !!(pj && pj.resource === base + '/mcp'), detail: pj ? (pj.resource === base + '/mcp' ? 'Yes' : 'It reports ' + pj.resource) : 'Got ' + prm.status });
+    const mcpNoAuth = await fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(8000) });
+    checks.push({ name: 'Claude\'s endpoint refuses requests without sign-in', ok: mcpNoAuth.status === 401, detail: 'Got ' + mcpNoAuth.status });
+    selfTest = { at: Date.now(), ok: checks.every((c) => c.ok), checks };
+  } catch (e) {
+    selfTest = { at: Date.now(), ok: false, checks, error: 'Could not reach ' + base + ' from inside HomeClaude (' + (e.cause && e.cause.code || e.message) + '). Some networks cannot loop back to their own public address; try it from your phone on mobile data.' };
+  }
+  selfNonce = '';
+  return { ok: true };
+}
+
+function securitySnapshot() {
+  return {
+    mode: cfg.security.mode, publicUrl: cfg.publicUrl, publicPort: PUBLIC_PORT, adminPort: PORT,
+    allowTokenRemote: cfg.security.allowTokenRemote, tokenScope: cfg.security.tokenScope,
+    keyWhere: DEMO ? 'demo' : secrets.where(), keyFileOnVolume: !DEMO && secrets.hasFileKey(), keyMismatch,
+    pending: oauth.listPending(), connections: oauth.connections(), events: state.security.slice(0, 80), selfTest
+  };
 }
 
 // ---------- the setup guide's progress ----------
@@ -334,6 +456,7 @@ function snapshot() {
     lastCallAt: state.lastCallAt || 0,
     pinRequired: pinSet(),
     health,
+    security: securitySnapshot(),
     setup: cfg.setup,
     everConnected: !!(state.lastCallAt || state.activity.length),
     update: { latest: upd.latest, available: !!upd.latest && newer(upd.latest, pkg.version), checkedAt: upd.checkedAt, failed: upd.failed, enabled: UPDATE_CHECK && !DEMO, image: IMAGE + ':' + upd.latest }
@@ -390,7 +513,15 @@ function postJson(req, res, fn, { needPin = true, limit = 16384 } = {}) {
   let raw = '', tooBig = false;
   req.on('data', (d) => { if (tooBig) return; raw += d; if (raw.length > limit) { tooBig = true; raw = ''; } });
   req.on('end', () => {
-    if (needPin && !pinOk(req.headers['x-pin'])) return setTimeout(() => json(res, 401, { ok: false, error: 'Wrong or missing PIN' }), 500);
+    if (needPin && pinSet()) {
+      const ip = Net.clientIp(req, false), left = pinLimit.locked(ip);
+      if (left) return json(res, 429, { ok: false, error: 'Too many wrong PINs. Try again in ' + Math.ceil(left / 60) + ' min.' });
+      if (!pinOk(req.headers['x-pin'])) {
+        if (req.headers['x-pin'] && pinLimit.hit(ip)) securityEvent('pin-lockout', { ip });
+        return setTimeout(() => json(res, 401, { ok: false, error: 'Wrong or missing PIN' }), 500);
+      }
+      pinLimit.reset(ip);
+    }
     if (tooBig) return json(res, 413, { ok: false, error: 'That is too large' });
     let body;
     try { body = JSON.parse(raw || '{}'); } catch (e) { return json(res, 400, { ok: false, error: 'Bad JSON' }); }
@@ -412,19 +543,37 @@ function broadcastSoon() {
   }, 150);
 }
 
+/**
+ * The private port: settings page, its API, and /mcp for Claude Code on your network.
+ * In exposed mode it refuses anything that came through a reverse proxy or from
+ * outside the private address ranges, so even a wrongly pointed proxy cannot reach it.
+ */
+function adminRefusal(req) {
+  if (!exposed()) return null;
+  if (Net.cameThroughProxy(req)) return 'This is HomeClaude\'s private settings port. Point your reverse proxy at port ' + PUBLIC_PORT + ' (the public port) instead.';
+  if (!Net.isPrivate(req.socket.remoteAddress)) return 'In exposed mode the settings page only opens from your home network.';
+  return null;
+}
+let pageHashes = null;
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const url = u.pathname;
+  const refused = adminRefusal(req);
+  if (refused) {
+    securityEvent('admin-refused', { ip: Net.clientIp(req, Net.cameThroughProxy(req)), path: url.slice(0, 60) });
+    res.writeHead(403, Net.securityHeaders({ 'content-type': 'text/plain; charset=utf-8' })); return res.end(refused);
+  }
 
-  // Claude connects here: /mcp with "Authorization: Bearer <token>", or /mcp/<token> for apps that only take a URL
+  // Claude Code on your network: /mcp with "Authorization: Bearer <token>", or /mcp/<token> for apps that only take a URL
   const m = /^\/mcp(?:\/([A-Za-z0-9_-]{1,200}))?\/?$/.exec(url);
-  if (m) return serveMcp(req, res, m[1]);
+  if (m) return serveMcpLocal(req, res, m[1]);
 
   if (req.method === 'GET' && FILES[url]) {
     const [file, type] = FILES[url];
-    return fs.readFile(path.join(PUBLIC, file), (err, data) => {
+    return fs.readFile(path.join(PUBLIC, file), 'utf8', (err, data) => {
       if (err) { res.writeHead(500); return res.end('Missing ' + file); }
-      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-frame-options': 'DENY' });
+      if (!pageHashes || pageHashes.len !== data.length) pageHashes = Object.assign(Net.inlineHashes(data), { len: data.length });
+      res.writeHead(200, Net.securityHeaders({ 'content-type': type, 'cache-control': 'no-store', 'content-security-policy': Net.pageCsp(pageHashes) }));
       res.end(data);
     });
   }
@@ -440,7 +589,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && url === '/api/backups') return json(res, 200, { backups: DEMO ? [] : backups.list() });
   if (req.method === 'GET' && url === '/api/backup') {
-    if (!pinOk(u.searchParams.get('pin') || req.headers['x-pin'])) { res.writeHead(401); return res.end('Wrong or missing PIN'); }
+    const bip = Net.clientIp(req, false);
+    if (pinLimit.locked(bip)) { res.writeHead(429); return res.end('Too many wrong PINs'); }
+    if (!pinOk(u.searchParams.get('pin') || req.headers['x-pin'])) { pinLimit.hit(bip); res.writeHead(401); return res.end('Wrong or missing PIN'); }
     const p = backups.filePath(u.searchParams.get('kind') || '', u.searchParams.get('id') || '', u.searchParams.get('file') || '');
     if (!p) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="' + (u.searchParams.get('kind') + '-' + u.searchParams.get('id') + '-' + path.basename(p)).replace(/[^A-Za-z0-9_.-]/g, '_') + '"' });
@@ -455,6 +606,15 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/restore') return postJson(req, res, (b) => (DEMO ? { ok: false, error: 'Demo mode has no backups' } : restore(b)));
   if (req.method === 'POST' && url === '/api/health-check') return postJson(req, res, () => runHealth().then((h) => ({ ok: !!h })), { needPin: false });
   if (req.method === 'POST' && url === '/api/setup') return postJson(req, res, setupAction);
+  if (req.method === 'POST' && url === '/api/security') return postJson(req, res, setSecurity);
+  if (req.method === 'POST' && url === '/api/security/selftest') return postJson(req, res, runSelfTest);
+  if (req.method === 'POST' && url === '/api/connections/decide') return postJson(req, res, (b) => oauth.decide(b.id, !!b.approve, b.scope, Net.clientIp(req, false)));
+  if (req.method === 'POST' && url === '/api/connections/revoke') return postJson(req, res, (b) => {
+    if (b.all) { const n = oauth.revokeAll('all connections revoked on the HomeClaude page'); return { ok: true, revoked: n }; }
+    return oauth.revokeGrant(String(b.id || ''), 'revoked on the HomeClaude page') ? { ok: true } : { ok: false, error: 'That connection is gone' };
+  });
+  if (req.method === 'POST' && url === '/api/connections/scope') return postJson(req, res, (b) => (oauth.setScope(String(b.id || ''), b.scope) ? { ok: true } : { ok: false, error: 'Could not change it' }));
+  if (req.method === 'POST' && url === '/api/security/clear') return postJson(req, res, () => { state.security = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/activity-clear') return postJson(req, res, () => { state.activity = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/update-check') {
     return postJson(req, res, () => (UPDATE_CHECK && !DEMO) ? checkSelfUpdate().then((ok) => ({ ok, error: ok ? undefined : 'Could not reach GitHub to check. Is this machine online?' })) : { ok: false, error: 'Update checks are turned off' }, { needPin: false });
@@ -462,6 +622,107 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(404); res.end('Not found');
 });
+
+// ---------- the public port: only Claude's endpoint and the sign-in ----------
+const failLimit = Net.limiter({ max: 10, windowMs: 10 * 60e3, lockMs: 30 * 60e3 });     // per address
+const failGlobal = Net.limiter({ max: 300, windowMs: 10 * 60e3, lockMs: 10 * 60e3 });   // everyone together
+const regLimit = Net.limiter({ max: 5, windowMs: 60 * 60e3, lockMs: 60 * 60e3 });
+const authzLimit = Net.limiter({ max: 6, windowMs: 10 * 60e3, lockMs: 20 * 60e3 });
+
+function publicFail(ip, why) {
+  if (failLimit.hit(ip)) securityEvent('address-locked', { ip, why });
+  if (failGlobal.hit('all')) securityEvent('public-paused', { why: 'too many failed attempts from many addresses' });
+}
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    let raw = '', big = false;
+    req.on('data', (d) => { if (big) return; raw += d; if (raw.length > limit) { big = true; raw = ''; } });
+    req.on('end', () => (big ? reject(Object.assign(new Error('too large'), { status: 413 })) : resolve(raw)));
+    req.on('error', reject);
+  });
+}
+function parseForm(req, raw) {
+  if (/application\/json/i.test(req.headers['content-type'] || '')) { try { return JSON.parse(raw || '{}'); } catch (e) { return {}; } }
+  return Object.fromEntries(new URLSearchParams(raw));
+}
+function basicAuth(req) {
+  const m = /^Basic\s+(.+)$/i.exec(String(req.headers.authorization || ''));
+  if (!m) return null;
+  const t = Buffer.from(m[1], 'base64').toString('utf8'), i = t.indexOf(':');
+  return i < 0 ? null : { id: decodeURIComponent(t.slice(0, i)), secret: decodeURIComponent(t.slice(i + 1)) };
+}
+
+const publicServer = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://x');
+  const url = u.pathname, ip = Net.clientIp(req, true);
+  const base = () => Net.securityHeaders({ 'cache-control': 'no-store', 'strict-transport-security': 'max-age=31536000' });
+  const send = (code, obj, extra) => { res.writeHead(code, Object.assign(base(), { 'content-type': 'application/json' }, extra || {})); res.end(obj == null ? '' : JSON.stringify(obj)); };
+  const html = (code, page) => {
+    const h = Net.inlineHashes(page);
+    res.writeHead(code, Object.assign(base(), { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; script-src " + h.scripts.join(' ') + '; style-src ' + h.styles.join(' ') + "; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" }));
+    res.end(page);
+  };
+  try {
+    // checks that hold for everything on this port
+    if (url === '/healthz' && req.method === 'GET') return send(200, { ok: true, mode: cfg.security.mode, match: !!selfNonce && u.searchParams.get('n') === selfNonce });
+    if (!exposed()) return send(404, { error: 'HomeClaude is in local mode. Nothing is served on the public port.' });
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+    if (proto !== 'https' && !INSECURE_PUBLIC) return send(403, { error: 'HomeClaude only answers over https. The reverse proxy must send X-Forwarded-Proto: https.' });
+    const want = (() => { try { return new URL(cfg.publicUrl).host.toLowerCase(); } catch (e) { return ''; } })();
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+    if (want && host !== want && !INSECURE_PUBLIC) return send(421, { error: 'This address is not the one HomeClaude is set up for (' + want + ').' });
+    const left = Math.max(failLimit.locked(ip), failGlobal.locked('all'));
+    if (left) return send(429, { error: 'Too many failed attempts. Try again later.' }, { 'retry-after': String(left) });
+
+    // discovery
+    if (req.method === 'GET' && (url === '/.well-known/oauth-protected-resource' || url === '/.well-known/oauth-protected-resource/mcp')) return send(200, oauth.resourceMetadata(), { 'cache-control': 'max-age=300' });
+    if (req.method === 'GET' && url === '/.well-known/oauth-authorization-server') return send(200, oauth.serverMetadata(), { 'cache-control': 'max-age=300' });
+
+    // sign-in
+    if (req.method === 'POST' && url === '/oauth/register') {
+      if (regLimit.locked(ip)) return send(429, { error: 'too_many_requests' });
+      regLimit.hit(ip);
+      const r = oauth.register(parseForm(req, await readBody(req, 16384)));
+      return send(r.status, r.body);
+    }
+    if (req.method === 'GET' && url === '/oauth/authorize') {
+      if (authzLimit.locked(ip)) return html(429, oauth.errorPage(429, 'Too many requests', 'Wait a while before trying to connect again.').html);
+      authzLimit.hit(ip);
+      const r = await oauth.authorize(Object.fromEntries(u.searchParams), ip);
+      if (r.location) { res.writeHead(302, Object.assign(base(), { location: r.location })); return res.end(); }
+      return html(r.status, r.html);
+    }
+    if (req.method === 'GET' && url === '/oauth/status') { const r = oauth.status(u.searchParams.get('id'), u.searchParams.get('s')); return send(r.status, r.body); }
+    if (req.method === 'POST' && url === '/oauth/token') {
+      const r = await oauth.token(parseForm(req, await readBody(req, 16384)), basicAuth(req));
+      if (r.status >= 400) publicFail(ip, 'token: ' + r.body.error);
+      return send(r.status, r.body, { pragma: 'no-cache' });
+    }
+    if (req.method === 'POST' && url === '/oauth/revoke') { const r = await oauth.revokeToken(parseForm(req, await readBody(req, 16384)), basicAuth(req)); return send(r.status, r.body); }
+
+    // Claude's endpoint
+    if (url === '/mcp' || url === '/mcp/') {
+      const tok = bearerOf(req);
+      const challenge = 'Bearer resource_metadata="' + cfg.publicUrl + '/.well-known/oauth-protected-resource", scope="homeclaude"';
+      const grant = oauth.verify(tok, ip);
+      let who = null;
+      if (grant) who = { label: grant.clientName, access: capAccess(grant.scope), remote: true, ip, key: grant.id };
+      else if (tok && cfg.security.allowTokenRemote && tokenOk(tok)) who = { label: 'Access token (outside)', access: capAccess(cfg.security.tokenScope), remote: true, ip, key: 'token' };
+      if (!who) {
+        if (tok) publicFail(ip, 'bad token on /mcp');
+        return setTimeout(() => send(401, { error: tok ? 'invalid_token' : 'Sign-in required' }, { 'www-authenticate': challenge + (tok ? ', error="invalid_token"' : '') }), tok ? 300 : 0);
+      }
+      if (!cfg.access.enabled) return send(503, { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Claude access is switched off in HomeClaude' } });
+      return runMcp(req, res, who);
+    }
+    return send(404, { error: 'Not found' });
+  } catch (e) {
+    return send(e.status || 500, { error: e.status === 413 ? 'Request too large' : 'Something went wrong' });
+  }
+});
+publicServer.headersTimeout = 20000; publicServer.requestTimeout = 60000;
+server.headersTimeout = 20000;
 
 setInterval(broadcastSoon, 1500).unref();
 ['SIGTERM', 'SIGINT'].forEach((sig) => process.on(sig, () => process.exit(0)));
@@ -472,6 +733,8 @@ function start() {
   setTimeout(checkHa, DEMO ? 200 : 1000).unref();
   runHealth(); setInterval(runHealth, 60000).unref();
   setInterval(checkHa, 60000).unref();
+  publicServer.on('error', (e) => console.error('Public port ' + PUBLIC_PORT + ': ' + e.message));
+  publicServer.listen(PUBLIC_PORT, '0.0.0.0', () => console.log('Public port ' + PUBLIC_PORT + ': ' + (exposed() ? 'exposed mode, Claude sign-in and /mcp only' : 'local mode, serves nothing')));
   server.listen(PORT, '0.0.0.0', () => {
     console.log('HomeClaude v' + pkg.version + ' on http://localhost:' + PORT + (DEMO ? ' (demo: simulated Home Assistant, access token "demo")' : ''));
     console.log('Claude connects to http://<this machine>:' + PORT + '/mcp');

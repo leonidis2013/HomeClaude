@@ -41,11 +41,15 @@ Run the command HomeClaude shows, once:
 claude mcp add --transport http homeclaude http://192.168.1.20:9085/mcp --header "Authorization: Bearer <token>"
 ```
 
-### claude.ai, Claude Desktop and the phone app
+### claude.ai, Claude Desktop and the phone app: exposed mode
 
-These connect from Anthropic's servers, not from your device, so HomeClaude must be reachable from the internet over **https**, for example with a Cloudflare Tunnel or your reverse proxy pointing at the container. Enter that address under Settings > Connect Claude > Public address. Then on claude.ai: **Customize > Connectors > + Add > Add custom connector**, paste the URL (`https://your-address/mcp`), choose **No sign in**, and add the request header `Authorization: Bearer <token>`. The same connector then works in Claude Desktop and the phone app. If an app has no place for headers, `https://your-address/mcp/<token>` also works.
+These connect from Anthropic's servers, not from your device, so HomeClaude has to be reachable from the internet. That is **exposed mode** (Settings > Security):
 
-Exposing it to the internet means the token is all that protects it: keep the permissions as narrow as you need, and use **New token** if it ever leaks.
+1. Set a **control PIN** (required in exposed mode).
+2. Point a reverse proxy with an https certificate, for example a **Cloudflare Tunnel** or Nginx Proxy Manager, at HomeClaude's **public port**: container port 8081, published as **9086** in `truenas-app.yaml`. Never forward the settings port (9085).
+3. Enter the public address (for example `https://homeclaude.yourdomain.com`), switch to **Exposed**, and press **Test**. HomeClaude calls its own public address and checks that it reaches the public port, that the settings page and its API are not reachable from outside, that Claude can find the sign-in, and that `/mcp` refuses unsigned requests.
+4. On claude.ai: **Customize > Connectors > + Add > Add custom connector**, paste `https://homeclaude.yourdomain.com/mcp`, leave Authentication on its default sign-in, **Add**, then **Connect**.
+5. A HomeClaude sign-in page opens with a code like `K7Q-2XM`. The same code appears in a banner on HomeClaude's page at home. Check that they match, choose what this connection may do (Look only, Help build, Hands on), and **Approve**. The connector then works in Claude Desktop and the phone app too.
 
 ### Try it
 
@@ -59,11 +63,27 @@ Exposing it to the internet means the token is all that protects it: keep the pe
 - **Helpers, dashboards, users, integrations setup, Supervisor and add-ons** are not covered in this version.
 - Scenes and scripts that already exist are run as they are: if a script unlocks a door, `script.turn_on` runs it. Blocking checks what Claude sends and what it saves, not what existing scripts do.
 
-## Security: please read
+## Security
 
-- The access token gives whoever holds it what Permissions allows. It is stored encrypted (AES-256-GCM, key in `/data/secret.key`), and so is the Home Assistant token.
-- There is **no login on the page** by default. Anyone who can open it can change permissions and see the access token. Keep it on a trusted network, or set a **control PIN** (Settings > Settings > Control); with a PIN, every change and showing the token need it.
-- Requests to `/mcp` that come from a web page (with a foreign `Origin`) are refused, so another site in your browser cannot use it.
+### Local only (default)
+- HomeClaude answers only on your network. The public port (8081) serves nothing.
+- Claude Code on your network uses the access token (`Authorization: Bearer`, or `/mcp/<token>`).
+- There is **no login on the page** unless you set a **control PIN** (Settings > Settings > Control). With a PIN, every change and showing the token need it. Five wrong PINs lock that address out for 10 minutes.
+
+### Exposed
+- **Two doors.** The settings page and its API stay on the private port. In exposed mode that port refuses anything that came through a proxy (`X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP` and similar) and anything from outside the private address ranges, so even a proxy pointed at the wrong port cannot open it. The public port serves only Claude's sign-in and `/mcp`; everything else is 404.
+- **Sign-in with approval at home, no password on the internet.** OAuth 2.1 with PKCE (S256 only): protected resource metadata (RFC 9728), authorization server metadata (RFC 8414), dynamic client registration (RFC 7591) and client ID metadata documents (how claude.ai identifies itself). Nothing connects until you approve the matching code on the page at home, so there is nothing on the public side to guess.
+- **Per-connection permissions**, chosen on approval and changeable later. A connection never gets more than Permissions allows, and **deleting and restarting never work from outside**.
+- **Short-lived, rotating tokens.** Access tokens last an hour; refresh tokens rotate on every use and expire after 30 days unused. Re-using an old refresh token, or a sign-in code twice, revokes that connection at once (theft detection). Only SHA-256 hashes of tokens are stored. Revoke any connection, or all, from Settings > Security.
+- **The plain access token does not work from outside** unless you turn that on, and then only with the permission level you pick. Tokens in the address (`/mcp/<token>`) never work on the public port.
+- **Abuse limits.** 10 failed attempts lock an address out for 30 minutes; widespread failures pause sign-in from outside for 10 minutes; app registrations, sign-in requests and pending approvals are rate-limited; each connection is limited to 120 requests a minute.
+- **https only.** The public port refuses requests the proxy did not mark `X-Forwarded-Proto: https`, and requests for any host name other than your public address. Responses carry HSTS.
+- **Strict headers** everywhere: a Content-Security-Policy that only runs HomeClaude's own scripts (by hash), no framing, no referrer, `nosniff`. Requests to `/mcp` from a web page with a foreign `Origin` are refused.
+- **Security events** (sign-in requests, approvals, revocations, lockouts, refused requests, mode changes) are listed in Settings > Security.
+
+### Encryption at rest
+- The Home Assistant token and the access token are encrypted with AES-256-GCM.
+- By default the key is in `/data/secret.key`. To keep it off the volume, set `HOMECLAUDE_MASTER_KEY` in the app's environment (see `truenas-app.yaml`). HomeClaude derives the key with scrypt, re-encrypts the tokens and deletes `secret.key`; a copy of the volume alone is then useless. If the variable is later wrong or missing, the page says so and you enter the Home Assistant token again.
 - The Home Assistant user you made for Claude can be disabled in Home Assistant at any time, which cuts HomeClaude off completely.
 
 ## How it talks to Claude
@@ -72,7 +92,7 @@ Exposing it to the internet means the token is all that protects it: keep the pe
 
 ## Testing status
 
-`npm test` runs 13 tests: the health checks (storage, mounts, memory), the blocking rules, the MCP protocol, every tool against a pretend Home Assistant (including backups, pruning, refusals and the restart check), the real Home Assistant client over HTTP and WebSocket against a fake Home Assistant server (including a refused token and an unreachable host), and the whole server over HTTP (token, Origin check, off switch, PIN, saving and restoring an automation, new token). Connecting with the official MCP Python SDK client works in both the 2026-07-28 and the older handshake mode. The page was checked in a browser in demo mode, on desktop and phone sizes.
+`npm test` runs 18 tests: the network and lockout rules, the master key move, OAuth (approval, PKCE, one-time codes, refresh rotation, theft detection, client metadata documents), exposed mode end to end (private port refuses proxied requests, public port hides the settings, https and host checks, lockouts, PIN lockout), the health checks (storage, mounts, memory), the blocking rules, the MCP protocol, every tool against a pretend Home Assistant (including backups, pruning, refusals and the restart check), the real Home Assistant client over HTTP and WebSocket against a fake Home Assistant server (including a refused token and an unreachable host), and the whole server over HTTP (token, Origin check, off switch, PIN, saving and restoring an automation, new token). The official MCP Python SDK client connects in both the 2026-07-28 and the older handshake mode, including the full OAuth sign-in with approval at home, and gets only the tools its connection allows. The page was checked in a browser in demo mode, on desktop and phone sizes.
 
 **Not tested against a real Home Assistant.** The API calls follow Home Assistant's documented REST and WebSocket APIs, but a real instance, with its own versions and data, could not be used where this was written. Expect some first-run fixes; please report what you find.
 
