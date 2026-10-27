@@ -25,6 +25,8 @@ Settings, the encrypted tokens, the activity list and backups live in `/data` (t
 
 ## Set up
 
+The first time you open HomeClaude, a **setup guide** walks you through it one step at a time, with every step and its status down the left side: make a user and token in Home Assistant, connect (it tells you what went wrong if it cannot, and checks the user is an administrator), choose what Claude may change (Look only, Help build or Hands on), an optional PIN, and connecting Claude (it turns green by itself when Claude's first request arrives). You can open it again from Settings > Settings > Setup guide. The same steps by hand:
+
 1. **Make a user for Claude in Home Assistant.** Settings > People > Users > Add user, for example "Claude", with **Administrator** on (logs, traces, integrations and automation configs are only open to administrators). Everything Claude does then shows in the logbook under that name.
 2. **Make a token.** Log in as that user, open its profile > **Security** > Long-lived access tokens > **Create token**, and copy it.
 3. **Open HomeClaude** at `http://<this machine>:8080` (9085 on TrueNAS). Under Settings > Home Assistant enter the address, using the **IP address** (for example `http://192.168.1.10:8123`; `.local` names usually do not resolve inside a container), paste the token, and **Save**. The status turns green.

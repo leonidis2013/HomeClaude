@@ -329,8 +329,9 @@ test('server: token, origin, access switch, PIN, live Home Assistant settings', 
 });
 
 // ---------- run ----------
-process.on('beforeExit', () => { if (!process.exitCode) { console.log('A test stopped without finishing (nothing left to wait for)'); process.exit(1); } });
-(async () => {
+module.exports = { fakeHa };
+if (require.main === module) process.on('beforeExit', () => { if (!process.exitCode) { console.log('A test stopped without finishing (nothing left to wait for)'); process.exit(1); } });
+if (require.main === module) (async () => {
   let failed = 0;
   const only = process.env.ONLY;
   for (const t of tests.filter((x) => !only || x.name.startsWith(only))) {

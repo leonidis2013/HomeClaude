@@ -38,7 +38,8 @@ const DEFAULTS = {
   access: { enabled: true, edit: false, services: false, delete: false, restart: false, blocked: Guard.DEFAULT_BLOCKED.slice() },
   mcpToken: '',
   publicUrl: '',
-  backup: { keep: 30 }
+  backup: { keep: 30 },
+  setup: { completed: false, marks: {} }
 };
 
 function readJson(file, fallback) {
@@ -53,9 +54,13 @@ function writeJson(file, obj) {
   catch (e) { try { fs.unlinkSync(tmp); } catch (x) { /* none */ } fs.writeFileSync(file, text, { mode: 0o600 }); }
 }
 
-let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), DEMO ? {} : readJson(cfgPath, {}));
-['ha', 'access', 'backup'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
+const savedCfg = DEMO ? {} : readJson(cfgPath, {});
+let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), savedCfg);
+// installs from before the setup guide already went through setup
+if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: true, marks: {} };
+['ha', 'access', 'backup', 'setup'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
+if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
 
 function changeConfig(mutator) {
   const next = JSON.parse(JSON.stringify(cfg));
@@ -128,7 +133,10 @@ async function checkHa() {
   try {
     const c = await ha.rest('GET', '/api/config', undefined, { timeoutMs: 8000 });
     await ha.command({ type: 'ping' }).catch((e) => { if (!/unknown/i.test(e.message)) throw e; });
-    haStatus = { ok: true, configured: true, checking: false, checkedAt: Date.now(), error: '', version: c.version || '', name: c.location_name || '', state: c.state || '', ms: Date.now() - t0 };
+    // logs, traces and configs are only open to administrators: find out now rather than at Claude's first question
+    let admin = null;
+    try { await ha.command({ type: 'system_log/list' }); admin = true; } catch (e) { if (e.status === 403 || /unauthor/i.test(e.message)) admin = false; }
+    haStatus = { ok: true, configured: true, checking: false, checkedAt: Date.now(), error: '', version: c.version || '', name: c.location_name || '', state: c.state || '', ms: Date.now() - t0, admin };
   } catch (e) {
     haStatus = { ok: false, configured: true, checking: false, checkedAt: Date.now(), error: e.message, version: haStatus.version, name: haStatus.name, ms: 0 };
   }
@@ -254,6 +262,20 @@ async function restore(b) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+// ---------- the setup guide's progress ----------
+const SETUP_MARKS = ['welcome', 'user', 'token', 'perms', 'pin', 'claude'];
+function setupAction(b) {
+  return changeConfig((c) => {
+    if (b.reset) { c.setup = { completed: false, marks: {} }; return; }
+    if (b.mark != null) {
+      if (!SETUP_MARKS.includes(b.mark)) return 'Unknown step';
+      if (b.value === false || b.value == null) delete c.setup.marks[b.mark];
+      else c.setup.marks[b.mark] = b.value === 'skip' ? 'skip' : true;
+    }
+    if (typeof b.completed === 'boolean') c.setup.completed = b.completed;
+  });
+}
+
 // ---------- what the page sees ----------
 let bkCache = { n: 0, at: 0 };
 function backupCount() {
@@ -278,6 +300,8 @@ function snapshot() {
     activityTotal: state.activity.length,
     lastCallAt: state.lastCallAt || 0,
     pinRequired: pinSet(),
+    setup: cfg.setup,
+    everConnected: !!(state.lastCallAt || state.activity.length),
     update: { latest: upd.latest, available: !!upd.latest && newer(upd.latest, pkg.version), checkedAt: upd.checkedAt, failed: upd.failed, enabled: UPDATE_CHECK && !DEMO, image: IMAGE + ':' + upd.latest }
   };
 }
@@ -395,6 +419,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/token') return postJson(req, res, (b) => (b.regenerate ? newToken() : { ok: true, token: mcpToken() }));
   if (req.method === 'POST' && url === '/api/settings') return postJson(req, res, changeSettings);
   if (req.method === 'POST' && url === '/api/restore') return postJson(req, res, (b) => (DEMO ? { ok: false, error: 'Demo mode has no backups' } : restore(b)));
+  if (req.method === 'POST' && url === '/api/setup') return postJson(req, res, setupAction);
   if (req.method === 'POST' && url === '/api/activity-clear') return postJson(req, res, () => { state.activity = []; saveState(); return { ok: true }; });
   if (req.method === 'POST' && url === '/api/update-check') {
     return postJson(req, res, () => (UPDATE_CHECK && !DEMO) ? checkSelfUpdate().then((ok) => ({ ok, error: ok ? undefined : 'Could not reach GitHub to check. Is this machine online?' })) : { ok: false, error: 'Update checks are turned off' }, { needPin: false });

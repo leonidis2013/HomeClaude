@@ -233,6 +233,59 @@
   ol.steps li { margin:4px 0; } ol.steps b { color:var(--fg); font-weight:600; }
   .sub2 { font-weight:700; font-size:13px; margin:14px 0 2px; }
   .sub2:first-of-type { margin-top:4px; }
+  /* ===== setup guide: steps with their status down the left, one step at a time on the right ===== */
+  .side.wside { width:236px; flex:0 0 236px; gap:2px; }
+  .wzs { display:flex; align-items:flex-start; gap:10px; text-align:left; padding:8px 10px; position:relative; }
+  .wzs .num { width:24px; height:24px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:800;
+              border:1.5px solid var(--line); background:var(--card2); color:var(--dim); }
+  .wzs .num svg { width:13px; height:13px; stroke:currentColor; stroke-width:3; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+  .wzs .wt { display:flex; flex-direction:column; min-width:0; padding-top:2px; }
+  .wzs .wt b { font-weight:600; color:var(--fg); font-size:13.5px; }
+  .wzs .wt small { font-size:11.5px; color:var(--dim); font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wzs.done .num { background:var(--ok); border-color:var(--ok); color:var(--onacc); }
+  .wzs.bad .num { background:var(--bad); border-color:var(--bad); color:#fff; }
+  .wzs.bad .wt small { color:var(--bad); }
+  .wzs.skip .num { border-style:dashed; }
+  .wzs.on .num { border-color:var(--acc); color:var(--acc); }
+  .wzs.on.done .num { color:var(--onacc); }
+  .wzs:not(:last-child)::after { content:""; position:absolute; left:21px; top:34px; bottom:-8px; width:1.5px; background:var(--line); }
+  .wzs.done:not(:last-child)::after { background:color-mix(in srgb, var(--ok) 55%, var(--line)); }
+  .wzprog { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); font-weight:700; padding:2px 10px 10px; }
+  .card.wz { max-width:760px; padding:20px 22px; }
+  .wzk { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--acc); font-weight:700; }
+  .wz h3 { font-size:20px; margin:4px 0 8px; letter-spacing:-.01em; }
+  .wz p { margin:0 0 10px; color:var(--dim); font-size:14px; line-height:1.5; }
+  .wz p b { color:var(--fg); }
+  .wzbody { min-height:180px; }
+  .wzf { display:flex; gap:8px; align-items:center; margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
+  .wzf .sp { flex:1; }
+  .wzf button { padding:8px 16px; }
+  .wzf .on { padding:8px 20px; }
+  .picks { display:grid; gap:8px; margin:6px 0 12px; }
+  .pick { display:flex; gap:12px; align-items:flex-start; text-align:left; border:1px solid var(--line); background:var(--card2); border-radius:10px; padding:12px 14px; font-weight:400; }
+  .pick:hover { background:color-mix(in srgb, var(--card2) 80%, var(--fg) 6%); }
+  button.pick.on, button.pick.on:hover { border-color:var(--acc); background:color-mix(in srgb, var(--acc) 12%, var(--card2)); color:var(--fg); box-shadow:inset 0 0 0 1px var(--acc); }
+  .pick .rb { width:18px; height:18px; border-radius:50%; border:2px solid var(--faint); flex:none; margin-top:1px; }
+  .pick.on .rb { border-color:var(--acc); background:radial-gradient(var(--acc) 0 4px, transparent 5px); }
+  .pick b { display:block; font-weight:700; font-size:14px; }
+  .pick span { display:block; color:var(--dim); font-size:12.5px; margin-top:2px; line-height:1.4; }
+  .pick .tag2 { display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ok); margin-left:6px; }
+  .waitbox { display:flex; align-items:center; gap:10px; border:1px dashed color-mix(in srgb, var(--acc) 55%, transparent); border-radius:8px; padding:10px 12px; font-size:13px; color:var(--dim); margin-top:12px; }
+  .waitbox .spin { border-color:color-mix(in srgb, var(--acc) 30%, transparent); border-top-color:var(--acc); flex:none; }
+  .wz .okbox, .wz .errbox { margin-top:10px; font-size:13px; padding:9px 12px; }
+  .wz .set { padding:9px 0; }
+  .sumrow { display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--line); font-size:13.5px; }
+  .sumrow.wzs::after { display:none; }
+  .sumrow:first-child { border-top:0; } .sumrow span { flex:1; } .sumrow small { color:var(--dim); }
+  @media (max-width:720px) {
+    .side.wside { width:100%; flex:none; }
+    .wzs { padding:6px 12px 6px 6px; align-items:center; }
+    .wzs .wt small { display:none; }
+    .wzs::after { display:none; }
+    .wzprog { display:none; }
+    .card.wz { padding:16px; }
+    .wzf { position:sticky; bottom:0; background:var(--card); padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
+  }
   .rv code, .note code, ol.steps code { font:12px var(--mono); background:var(--card2); padding:1px 5px; border-radius:5px; color:var(--fg); }
 </style>
 </head>
@@ -268,6 +321,13 @@
       <div class="alist" id="actList"></div>
     </div>
   </div>
+</section>
+
+<section id="tab-wizard" class="hide">
+ <div class="setup">
+  <div class="side wside" id="wzSide"></div>
+  <div class="pane"><div class="card wz" id="wzPane"></div></div>
+ </div>
 </section>
 
 <section id="tab-setup" class="hide">
@@ -382,6 +442,7 @@
       <div class="card">
         <h2>About</h2>
         <div class="set first"><div class="sl"><b>Version</b></div><div class="sc"><span class="val" id="verVal"></span></div></div>
+        <div class="set"><div class="sl"><b>Setup guide</b><span>Walk through connecting Home Assistant and Claude again, step by step</span></div><div class="sc"><button id="wzAgain">Open the guide</button></div></div>
         <div class="set" id="updRow"><div class="sl"><b>Updates</b><span id="updNote"></span></div><div class="sc"><button id="updBtn">Check now</button></div></div>
         <div class="set hide" id="updHow"><div class="sl"><b>To update</b><span>TrueNAS pulls the newest image when the app is restarted (pull policy always). Or set the image to this</span></div><div class="sc"><input id="updImg" class="txt wide" readonly spellcheck="false" aria-label="New image name"></div></div>
         <div class="set"><div class="sl"><b>Mode</b><span id="modeNote"></span></div><div class="sc"><span class="val" id="modeVal"></span></div></div>
@@ -422,7 +483,7 @@
   if (SUBS.indexOf(subPane) < 0) subPane = 'ha';
 
   // ---------- state ----------
-  var snap = null, lastMsg = 0, pin = '', inSetup = false, token = '';
+  var snap = null, lastMsg = 0, pin = '', inSetup = false, inWizard = false, token = '';
   try { pin = sessionStorage.getItem('hc-pin') || ''; } catch (e) {}
   var haLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null;
 
@@ -564,11 +625,11 @@
     var st = s.ha.status || {}, a = s.access;
     // alerts
     var al = [];
-    if (!st.configured) al.push('<div class="errbox">Home Assistant is not set up yet. <button id="alSetup" class="on">Set it up</button></div>');
+    if (!st.configured || !(s.setup && s.setup.completed)) al.push('<div class="errbox">' + (st.configured ? 'Setup is not finished yet.' : 'Home Assistant is not set up yet.') + ' <button id="alSetup" class="on">Open the setup guide</button></div>');
     else if (!st.ok && st.error) al.push('<div class="errbox">' + esc(st.error) + '</div>');
     if (!a.enabled) al.push('<div class="errbox">Claude access is off: every request is refused.</div>');
     $('#alerts').innerHTML = al.join('');
-    var as = $('#alSetup'); if (as) as.onclick = function () { showTab(true); showSub('ha'); };
+    var as = $('#alSetup'); if (as) as.onclick = function () { openWizard(); };
 
     // Home Assistant card
     var hc = $('#haCard');
@@ -645,7 +706,7 @@
     snap = s; lastMsg = Date.now();
     document.body.classList.remove('offline');
     renderHeader(s);
-    if (inSetup) updateSettings(s); else renderMain(s);
+    if (inWizard) renderWizard(s); else if (inSetup) updateSettings(s); else renderMain(s);
   }
 
   // ---------- backups ----------
@@ -754,6 +815,284 @@
     api('api/update-check', {}).then(function (j) { b.disabled = false; b.textContent = 'Check now'; if (!j.ok && !j.cancelled) toast(j.error || 'Could not check'); });
   };
 
+  // ---------- setup guide ----------
+  // One step at a time on the right; every step and its status down the left.
+  var WZ = [
+    { id: 'welcome', title: 'Welcome' },
+    { id: 'user', title: 'Claude user' },
+    { id: 'token', title: 'Access token' },
+    { id: 'connect', title: 'Connect Home Assistant' },
+    { id: 'perms', title: 'What Claude may do' },
+    { id: 'pin', title: 'Protect this page' },
+    { id: 'claude', title: 'Connect Claude' },
+    { id: 'done', title: 'Finish' }
+  ];
+  var CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>';
+  var wzStep = 0, wzScrolled = -1, wzDrawn = '', wzTesting = false, wzTried = false, wzAnyway = false, wzWho = 'code', wzPick = null;
+
+  function marks(s) { return (s.setup && s.setup.marks) || {}; }
+  function haGood(s) { var st = s.ha.status || {}; return !!(st.ok && st.admin !== false); }
+  function stepState(id, s) {
+    var m = marks(s), st = s.ha.status || {};
+    switch (id) {
+      case 'welcome': return m.welcome || haGood(s) ? ['done', 'Read'] : ['todo', 'Start here'];
+      case 'user': return m.user || haGood(s) ? ['done', 'Made'] : ['todo', 'In Home Assistant'];
+      case 'token': return m.token || haGood(s) ? ['done', 'Made'] : ['todo', 'In Home Assistant'];
+      case 'connect':
+        if (st.ok && st.admin === false) return ['bad', 'Not an administrator'];
+        if (st.ok) return ['done', 'Connected · ' + (st.version || '')];
+        if (st.configured && st.error && !st.checking) return ['bad', 'Not reachable'];
+        return ['todo', st.checking ? 'Testing…' : 'Address and token'];
+      case 'perms': return m.perms ? ['done', modeText(s.access)] : ['todo', 'Choose'];
+      case 'pin': return s.pinRequired ? ['done', 'PIN set'] : m.pin === 'skip' ? ['skip', 'Skipped'] : ['todo', 'Optional'];
+      case 'claude': return s.everConnected ? ['done', 'Claude connected'] : m.claude === 'skip' ? ['skip', 'Skipped for now'] : ['todo', 'Waiting for Claude'];
+      case 'done': return s.setup && s.setup.completed ? ['done', 'Finished'] : ['todo', ''];
+    }
+    return ['todo', ''];
+  }
+  function firstOpenStep(s) {
+    for (var i = 0; i < WZ.length; i++) { var c = stepState(WZ[i].id, s)[0]; if (c === 'todo' || c === 'bad') return i; }
+    return WZ.length - 1;
+  }
+  function mark(name, value) { return api('api/setup', { mark: name, value: value == null ? true : value }); }
+
+  function renderWizardSide(s) {
+    var done = 0;
+    var h = WZ.map(function (w, i) {
+      var st = stepState(w.id, s);
+      if (st[0] === 'done' || st[0] === 'skip') done++;
+      return '<button class="wzs ' + st[0] + (i === wzStep ? ' on' : '') + '" data-wz="' + i + '"><span class="num">' + (st[0] === 'done' ? CHECK : st[0] === 'bad' ? '!' : i + 1) + '</span>' +
+        '<span class="wt"><b>' + esc(w.title) + '</b><small>' + esc(st[1]) + '</small></span></button>';
+    }).join('');
+    $('#wzSide').innerHTML = '<div class="wzprog">Setup · ' + Math.min(done, WZ.length) + ' of ' + WZ.length + ' done</div>' + h;
+    $$('[data-wz]', $('#wzSide')).forEach(function (b) { b.onclick = function () { goStep(+b.dataset.wz); }; });
+    // on a phone the steps are a sideways strip: keep the current one in view
+    var cur = $('.wzs.on', $('#wzSide'));
+    if (cur && wzScrolled !== wzStep && $('#wzSide').scrollWidth > $('#wzSide').clientWidth) { wzScrolled = wzStep; $('#wzSide').scrollLeft = cur.offsetLeft - 16; }
+  }
+
+  function goStep(i) {
+    wzStep = Math.max(0, Math.min(WZ.length - 1, i));
+    wzDrawn = ''; wzTried = false; wzAnyway = false; wzPick = null;
+    if (snap) renderWizard(snap);
+    window.scrollTo(0, 0);
+  }
+  function next() { goStep(wzStep + 1); }
+
+  // footer: Back on the left; an optional quiet button and the main button on the right
+  function foot(main, opts) {
+    opts = opts || {};
+    return '<div class="wzf">' + (wzStep > 0 ? '<button id="wzBack">Back</button>' : '') + '<span class="sp"></span>' +
+      (opts.alt ? '<button id="wzAlt">' + esc(opts.alt) + '</button>' : '') +
+      '<button id="wzNext" class="on"' + (opts.disabled ? ' disabled' : '') + '>' + esc(main) + '</button></div>';
+  }
+  function head(title) { return '<div class="wzk">Step ' + (wzStep + 1) + ' of ' + WZ.length + '</div><h3>' + esc(title) + '</h3>'; }
+  function wire(onNext, onAlt) {
+    var b = $('#wzBack'); if (b) b.onclick = function () { goStep(wzStep - 1); };
+    var n = $('#wzNext'); if (n) n.onclick = function () {
+      n.disabled = true;
+      Promise.resolve(onNext()).then(function (ok) { n.disabled = false; if (ok !== false) next(); });
+    };
+    var a = $('#wzAlt'); if (a && onAlt) a.onclick = onAlt;
+  }
+
+  function hintFor(err) {
+    if (/refused the access token|token was refused|401/.test(err)) return 'Home Assistant did not accept the token. Copy it again, all of it, and paste it here.';
+    if (/connection refused/.test(err)) return 'Nothing answered at that address. Check the IP address, and that the port is 8123.';
+    if (/\.local/.test(err)) return 'Names ending in .local do not work from inside a container. Use Home Assistant\'s IP address instead, for example http://192.168.1.10:8123.';
+    if (/timed out|address not found/.test(err)) return 'No answer from that address. Use the IP address you open Home Assistant at on this network, with :8123 at the end.';
+    return '';
+  }
+
+  // the parts of a step that change while it is open (no redraw, so typing is not lost)
+  function wizardLive(s) {
+    var id = WZ[wzStep].id, st = s.ha.status || {};
+    if (id === 'connect') {
+      var box = $('#wzConn'), nx = $('#wzNext');
+      if (!box) return;
+      if (wzTesting || st.checking) box.innerHTML = '<div class="waitbox"><span class="spin"></span>Talking to Home Assistant…</div>';
+      else if (st.ok && st.admin === false) box.innerHTML = '<div class="errbox">Connected to Home Assistant ' + esc(st.version) + ', but this user is <b>not an administrator</b>. Claude would not be able to read logs, traces or automations. In Home Assistant, open Settings &gt; People &gt; Users, select the Claude user and turn on Administrator, then press Connect again.' +
+          (wzAnyway ? '' : '<br><button class="link" id="wzAnyway" style="margin-top:6px">Continue anyway</button>') + '</div>';
+      else if (st.ok) box.innerHTML = '<div class="okbox"><b>Connected.</b> Home Assistant ' + esc(st.version) + (st.name ? ' at ' + esc(st.name) : '') + ' answered in ' + esc(st.ms) + ' ms, and the user is an administrator.</div>';
+      else if (st.configured && st.error && wzTried) box.innerHTML = '<div class="errbox"><b>Could not connect.</b> ' + esc(hintFor(st.error) || st.error) + '<br><small style="color:var(--dim)">' + esc(st.error) + '</small></div>';
+      else box.innerHTML = '';
+      var any = $('#wzAnyway'); if (any) any.onclick = function () { wzAnyway = true; wizardLive(s); };
+      if (nx) nx.disabled = !(st.ok && (st.admin !== false || wzAnyway));
+    }
+    if (id === 'claude') {
+      var w = $('#wzWait'), n2 = $('#wzNext');
+      if (!w) return;
+      var last = (s.activity || [])[0];
+      w.innerHTML = s.everConnected
+        ? '<div class="okbox"><b>Claude is connected.</b>' + (last ? ' Its last request was <code>' + esc(last.tool) + '</code>, ' + esc(ago(last.t)) + '.' : '') + '</div>'
+        : '<div class="waitbox"><span class="spin"></span><span>Waiting for Claude\'s first request. This turns green by itself when Claude connects.</span></div>';
+      if (n2) n2.disabled = !s.everConnected;
+    }
+  }
+
+  function renderWizard(s) {
+    renderWizardSide(s);
+    var w = WZ[wzStep], sig = w.id + '|' + (w.id === 'pin' ? s.pinRequired : '') + '|' + (w.id === 'claude' ? token + s.publicUrl + wzWho + s.everConnected : '') + '|' + (w.id === 'done' ? JSON.stringify(WZ.map(function (x) { return stepState(x.id, s)[0]; })) : '') + '|' + (w.id === 'perms' ? wzPick : '');
+    if (sig !== wzDrawn) { wzDrawn = sig; drawStep(w.id, s); }
+    wizardLive(s);
+  }
+
+  function drawStep(id, s) {
+    var pane = $('#wzPane'), st = s.ha.status || {};
+    if (id === 'welcome') {
+      pane.innerHTML = head('Let\'s connect Claude to your Home Assistant') +
+        '<div class="wzbody"><p>HomeClaude lets Claude look inside Home Assistant to help you build automations and find out why something did not work. It takes about five minutes.</p>' +
+        '<p>You will need to log in to Home Assistant as an <b>administrator</b>, in another tab.</p>' +
+        '<ol class="steps"><li><b>Make a user for Claude</b> in Home Assistant, and a token for it</li><li><b>Connect HomeClaude</b> to Home Assistant with that token</li><li><b>Choose what Claude may change.</b> To start with, it can only look</li><li><b>Connect Claude</b> and ask it a first question</li></ol></div>' +
+        foot('Start');
+      wire(function () { return mark('welcome'); });
+    }
+    if (id === 'user') {
+      pane.innerHTML = head('Give Claude its own login') +
+        '<div class="wzbody"><p>A separate user means everything Claude does shows up in Home Assistant under its own name, and you can switch it off there at any time.</p>' +
+        '<ol class="steps"><li>Open Home Assistant' + (s.ha.url ? ' (<a href="' + esc(s.ha.url) + '" target="_blank" rel="noopener">' + esc(s.ha.url) + '</a>)' : '') + ' and go to <b>Settings &gt; People</b>, then the <b>Users</b> tab. If you do not see Users, turn on <b>Advanced mode</b> in your own profile first.</li>' +
+        '<li>Choose <b>Add user</b>. Name it <b>Claude</b>, pick a username and password.</li>' +
+        '<li>Turn on <b>Administrator</b>. Logs, traces and automations are only open to administrators.</li>' +
+        '<li>Choose <b>Create</b>.</li></ol></div>' +
+        foot('I made the user');
+      wire(function () { return mark('user'); });
+    }
+    if (id === 'token') {
+      pane.innerHTML = head('Make an access token for that user') +
+        '<div class="wzbody"><p>HomeClaude logs in with a long-lived access token instead of the password.</p>' +
+        '<ol class="steps"><li>Log out of Home Assistant and log in as the <b>Claude</b> user (or use a private window).</li>' +
+        '<li>Click the user\'s name at the bottom left to open its <b>profile</b>, then the <b>Security</b> tab.</li>' +
+        '<li>Scroll to <b>Long-lived access tokens</b> and choose <b>Create token</b>. Name it <b>HomeClaude</b>.</li>' +
+        '<li><b>Copy the token now.</b> Home Assistant shows it only once. You paste it in the next step.</li></ol></div>' +
+        foot('I copied the token');
+      wire(function () { return mark('token'); });
+    }
+    if (id === 'connect') {
+      pane.innerHTML = head('Connect HomeClaude to Home Assistant') +
+        '<div class="wzbody"><p>Enter the address you open Home Assistant at, using its <b>IP address</b> and port 8123, and paste the token.</p>' +
+        '<div class="set first"><div class="sl"><b>Address</b><span>For example http://192.168.1.10:8123</span></div><div class="sc"><input id="wzUrl" class="txt wide" placeholder="http://192.168.1.10:8123" spellcheck="false" autocomplete="off" autocapitalize="off" value="' + esc(s.ha.url || '') + '"></div></div>' +
+        '<div class="set"><div class="sl"><b>Access token</b><span>' + (s.ha.hasToken ? 'One is saved. Paste a new one only to replace it' : 'The long text from the last step') + '</span></div><div class="sc"><input id="wzTok" class="txt wide" type="password" autocomplete="new-password" spellcheck="false" placeholder="' + (s.ha.hasToken ? 'Saved' : 'Paste the token') + '"></div></div>' +
+        '<div class="set"><div class="sl"></div><div class="sc"><button id="wzConnect" class="on">Connect</button></div></div>' +
+        '<div id="wzConn"></div></div>' +
+        foot('Next', { disabled: !haGood(s) });
+      wire(function () { return true; });
+      if (s.demo) { $('#wzUrl').disabled = $('#wzTok').disabled = true; }
+      var go = function () {
+        var url = $('#wzUrl').value.trim(), tok = $('#wzTok').value.trim();
+        if (!s.demo && !url) { toast('Enter the address first'); return; }
+        if (!s.demo && !tok && !snap.ha.hasToken) { toast('Paste the token first'); return; }
+        wzTesting = true; wzTried = true; wizardLive(snap);
+        var save = s.demo ? Promise.resolve({ ok: true }) : api('api/ha', tok ? { url: url, token: tok } : { url: url });
+        save.then(function (j) {
+          if (!j.ok) { wzTesting = false; wizardLive(snap); report(j, 'Could not save'); return; }
+          $('#wzTok').value = '';
+          return api('api/ha-test', {}).then(function () { wzTesting = false; wizardLive(snap); });
+        });
+      };
+      $('#wzConnect').onclick = go;
+      $('#wzTok').addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+    }
+    if (id === 'perms') {
+      var a = s.access, cur = wzPick || (a.services ? 'hands' : a.edit ? 'build' : 'look');
+      var P = [
+        ['look', 'Look only', 'Claude can read everything (states, history, logs, traces, automations) and change nothing. Good to start with.', true],
+        ['build', 'Help build', 'Also create and change automations and scripts, and reload YAML. Each change is backed up first and can be restored.'],
+        ['hands', 'Hands on', 'Also run services: turn things on and off, run scripts, send notifications. This acts on the real home.']
+      ];
+      pane.innerHTML = head('What may Claude change?') +
+        '<div class="wzbody"><div class="picks">' + P.map(function (p) {
+          return '<button class="pick' + (cur === p[0] ? ' on' : '') + '" data-pick="' + p[0] + '"><span class="rb"></span><span><b>' + esc(p[1]) + (p[3] ? '<span class="tag2">Recommended</span>' : '') + '</b><span>' + esc(p[2]) + '</span></span></button>';
+        }).join('') + '</div>' +
+        '<p>Always blocked, whatever you choose: ' + a.blocked.map(function (d) { return '<span class="chip b">' + esc(d) + '</span>'; }).join(' ') + '. Claude can see them, but cannot unlock, open or disarm anything, or write automations that do.</p>' +
+        '<p>Deleting and restarting stay off. You can change all of this later under <b>Permissions</b>.</p></div>' +
+        foot('Use this');
+      $$('[data-pick]', pane).forEach(function (b) { b.onclick = function () { wzPick = b.dataset.pick; renderWizard(snap); }; });
+      wire(function () {
+        var pick = wzPick || cur;
+        var go = function () {
+          return api('api/access', { enabled: true, edit: pick !== 'look', services: pick === 'hands' }).then(function (j) {
+            if (!j.ok) { report(j, 'Could not save'); return false; }
+            return mark('perms').then(function () { return true; });
+          });
+        };
+        if (pick === 'hands') return confirmBox('Let Claude act on the home?', '<p>Claude will be able to turn things on and off and run scripts. Blocked domains stay blocked.</p>', 'Allow').then(function (y) { return y ? go() : false; });
+        return go();
+      });
+    }
+    if (id === 'pin') {
+      pane.innerHTML = head('Protect this page') +
+        '<div class="wzbody"><p>Anyone on your network who opens this page can change what Claude may do and see Claude\'s access token. A PIN stops that. You type it once per browser session.</p>' +
+        (s.pinRequired ? '<div class="okbox"><b>A PIN is set.</b> You can change or remove it later under Settings.</div>'
+          : '<div class="set first"><div class="sl"><b>PIN</b><span>At least 4 characters</span></div><div class="sc"><input id="wzPin" class="txt" type="password" autocomplete="new-password" placeholder="New PIN"><input id="wzPin2" class="txt" type="password" autocomplete="new-password" placeholder="Again"></div></div>') +
+        '</div>' + foot(s.pinRequired ? 'Next' : 'Set PIN', { alt: s.pinRequired ? null : 'Skip' });
+      wire(function () {
+        if (snap.pinRequired) return true;
+        var v = $('#wzPin').value, v2 = $('#wzPin2').value;
+        if (v.length < 4) { toast('A PIN needs at least 4 characters'); return false; }
+        if (v !== v2) { toast('The two PINs are not the same'); return false; }
+        return api('api/settings', { newPin: v }).then(function (j) {
+          if (!j.ok) { report(j, 'Could not set the PIN'); return false; }
+          pin = v; try { sessionStorage.setItem('hc-pin', v); } catch (e) {}
+          return mark('pin');
+        });
+      }, function () { mark('pin', 'skip').then(next); });
+    }
+    if (id === 'claude') {
+      if (!token) getToken();
+      var code = token ? codeCmd(token) : 'Getting the token…';
+      var url = connUrl();
+      var body = '<div class="seg" id="wzWho" style="margin:2px 0 12px"><button data-v="code"' + (wzWho === 'code' ? ' class="on"' : '') + '>Claude Code on a computer</button><button data-v="web"' + (wzWho === 'web' ? ' class="on"' : '') + '>claude.ai and the phone app</button></div>';
+      if (wzWho === 'code') {
+        body += '<ol class="steps"><li>On a Mac or PC on this network, open <b>Terminal</b>.</li><li>Paste this and press Return:</li></ol>' +
+          '<div class="copyrow"><pre class="cmd' + (token ? '' : ' dim') + '" id="cmdCode">' + esc(code) + '</pre><button data-copy="cmdCode">Copy</button></div>' +
+          '<ol class="steps" start="3"><li>Start Claude Code with <code>claude</code> and ask: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></li></ol>';
+      } else {
+        body += '<p>claude.ai, Claude Desktop and the phone app connect from Anthropic\'s servers, so HomeClaude needs an <b>https</b> address that reaches it from the internet (for example a Cloudflare Tunnel to port ' + esc(location.port || '80') + '). If you do not have one yet, use Claude Code for now.</p>' +
+          '<div class="set first"><div class="sl"><b>Public address</b><span>The https address that forwards to HomeClaude</span></div><div class="sc"><input id="wzPub" class="txt wide" placeholder="https://homeclaude.example.com" spellcheck="false" autocomplete="off" autocapitalize="off" value="' + esc(s.publicUrl || '') + '"><button id="wzPubSave">Save</button></div></div>' +
+          (url ? '<ol class="steps"><li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>. Name it <b>HomeClaude</b>.</li><li>Paste this URL, and under Authentication choose <b>No sign in</b>:</li></ol>' +
+            '<div class="copyrow"><pre class="cmd" id="cmdUrl">' + esc(url) + '</pre><button data-copy="cmdUrl">Copy</button></div>' +
+            '<ol class="steps" start="3"><li>Under <b>Request headers</b> add this, then choose <b>Add</b>:</li></ol>' +
+            '<div class="copyrow"><pre class="cmd' + (token ? '' : ' dim') + '" id="cmdHdr">' + esc(token ? hdr(token) : 'Getting the token…') + '</pre><button data-copy="cmdHdr">Copy</button></div>' +
+            '<ol class="steps" start="4"><li>In a new chat, ask: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></li></ol>' : '');
+      }
+      pane.innerHTML = head('Connect Claude') + '<div class="wzbody">' + body + '<div id="wzWait"></div></div>' + foot('Next', { alt: s.everConnected ? null : 'Skip for now', disabled: !s.everConnected });
+      $$('#wzWho button', pane).forEach(function (b) { b.onclick = function () { wzWho = b.dataset.v; renderWizard(snap); }; });
+      var ps = $('#wzPubSave');
+      if (ps) ps.onclick = function () { api('api/settings', { publicUrl: $('#wzPub').value.trim() }).then(function (j) { report(j, 'Could not save'); }); };
+      wire(function () { return mark('claude'); }, function () { mark('claude', 'skip').then(next); });
+    }
+    if (id === 'done') {
+      var rows = WZ.slice(0, -1).map(function (x) {
+        var t = stepState(x.id, s);
+        return '<div class="sumrow wzs ' + t[0] + '" style="padding:8px 0"><span class="num">' + (t[0] === 'done' ? CHECK : t[0] === 'bad' ? '!' : '–') + '</span><span>' + esc(x.title) + '</span><small>' + esc(t[1]) + '</small></div>';
+      }).join('');
+      var open = WZ.slice(0, -1).filter(function (x) { var c = stepState(x.id, s)[0]; return c === 'todo' || c === 'bad'; });
+      pane.innerHTML = head(open.length ? 'Almost there' : 'All set') +
+        '<div class="wzbody"><p>' + (open.length ? 'These steps still need you. Click one on the left to finish it, or open the dashboard and come back later.' : 'Claude can now look inside your Home Assistant. Every request it makes shows up on the dashboard.') + '</p>' + rows +
+        '<p style="margin-top:12px">Things to ask Claude: <b>"Why didn\'t my porch light turn on last night?"</b>, <b>"Which integrations are failing?"</b>, <b>"Write an automation that turns the coffee maker on at 6:15 on weekdays."</b></p>' +
+        '<p>You can open this guide again from Settings.</p></div>' +
+        foot('Open the dashboard');
+      wire(function () { return api('api/setup', { completed: true }).then(function () { closeWizard(); return false; }); });
+    }
+  }
+
+  function openWizard(step) {
+    inWizard = true; inSetup = false;
+    $('#tab-main').classList.add('hide'); $('#tab-setup').classList.add('hide'); $('#tab-wizard').classList.remove('hide');
+    gear.classList.add('on'); gear.title = 'Leave the setup guide'; $('span', gear).textContent = 'Close';
+    document.body.classList.add('in-setup');
+    wzStep = step != null ? step : (snap ? firstOpenStep(snap) : 0);
+    wzDrawn = '';
+    if (snap) render(snap);
+    window.scrollTo(0, 0);
+  }
+  function closeWizard() {
+    inWizard = false;
+    $('#tab-wizard').classList.add('hide');
+    $('span', gear).textContent = 'Done';
+    showTab(false);
+  }
+
   // ---------- tabs ----------
   var gear = $('#gear');
   function showSub(name) {
@@ -769,14 +1108,16 @@
   }
   $$('#sub button').forEach(function (b) { b.onclick = function () { showSub(b.dataset.sub); }; });
   function showTab(setup) {
-    inSetup = setup;
+    inSetup = setup; inWizard = false;
+    $('#tab-wizard').classList.add('hide');
     $('#tab-main').classList.toggle('hide', setup); $('#tab-setup').classList.toggle('hide', !setup);
     gear.classList.toggle('on', setup); gear.title = setup ? 'Back to the dashboard' : 'Settings';
     document.body.classList.toggle('in-setup', setup);
     if (setup) showSub(subPane); else if (snap) render(snap);
     window.scrollTo(0, 0);
   }
-  gear.onclick = function () { showTab(!inSetup); };
+  gear.onclick = function () { if (inWizard) closeWizard(); else showTab(!inSetup); };
+  $('#wzAgain').onclick = function () { openWizard(0); };
 
   // full screen (hidden where the browser can't, or when installed as an app)
   (function () {
@@ -793,7 +1134,7 @@
   // ---------- live data ----------
   function start(first) {
     render(first);
-    if (!first.ha.status.configured && !first.demo) { showTab(true); showSub('ha'); }
+    if (!(first.setup && first.setup.completed) || /[?&]setup\b/.test(location.search)) openWizard();
     var es = new EventSource('events');
     es.onmessage = function (e) { render(JSON.parse(e.data)); };
     setInterval(function () { if (Date.now() - lastMsg > 5000) document.body.classList.add('offline'); }, 1000);
