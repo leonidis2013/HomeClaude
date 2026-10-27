@@ -43,7 +43,7 @@ claude mcp add --transport http homeclaude http://192.168.1.20:9085/mcp --header
 
 ### claude.ai, Claude Desktop and the phone app: exposed mode
 
-These connect from Anthropic's servers, not from your device, so HomeClaude has to be reachable from the internet. That is **exposed mode** (Settings > Security):
+These connect from Anthropic's servers, not from your device, so HomeClaude has to be reachable from the internet. That is **exposed mode** (the **Security** tab (shield button in the top bar)):
 
 1. Set a **control PIN** (required in exposed mode).
 2. Point a reverse proxy with an https certificate, for example a **Cloudflare Tunnel** or Nginx Proxy Manager, at HomeClaude's **public port**: container port 8081, published as **9086** in `truenas-app.yaml`. Never forward the settings port (9085).
@@ -74,12 +74,12 @@ These connect from Anthropic's servers, not from your device, so HomeClaude has 
 - **Two doors.** The settings page and its API stay on the private port. In exposed mode that port refuses anything that came through a proxy (`X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP` and similar) and anything from outside the private address ranges, so even a proxy pointed at the wrong port cannot open it. The public port serves only Claude's sign-in and `/mcp`; everything else is 404.
 - **Sign-in with approval at home, no password on the internet.** OAuth 2.1 with PKCE (S256 only): protected resource metadata (RFC 9728), authorization server metadata (RFC 8414), dynamic client registration (RFC 7591) and client ID metadata documents (how claude.ai identifies itself). Nothing connects until you approve the matching code on the page at home, so there is nothing on the public side to guess.
 - **Per-connection permissions**, chosen on approval and changeable later. A connection never gets more than Permissions allows, and **deleting and restarting never work from outside**.
-- **Short-lived, rotating tokens.** Access tokens last an hour; refresh tokens rotate on every use and expire after 30 days unused. Re-using an old refresh token, or a sign-in code twice, revokes that connection at once (theft detection). Only SHA-256 hashes of tokens are stored. Revoke any connection, or all, from Settings > Security.
+- **Short-lived, rotating tokens.** Access tokens last an hour; refresh tokens rotate on every use and expire after 30 days unused. Re-using an old refresh token, or a sign-in code twice, revokes that connection at once (theft detection). Only SHA-256 hashes of tokens are stored. Revoke any connection, or all, from the **Security** tab (shield button in the top bar).
 - **The plain access token does not work from outside** unless you turn that on, and then only with the permission level you pick. Tokens in the address (`/mcp/<token>`) never work on the public port.
 - **Abuse limits.** 10 failed attempts lock an address out for 30 minutes; widespread failures pause sign-in from outside for 10 minutes; app registrations, sign-in requests and pending approvals are rate-limited; each connection is limited to 120 requests a minute.
 - **https only.** The public port refuses requests the proxy did not mark `X-Forwarded-Proto: https`, and requests for any host name other than your public address. Responses carry HSTS.
 - **Strict headers** everywhere: a Content-Security-Policy that only runs HomeClaude's own scripts (by hash), no framing, no referrer, `nosniff`. Requests to `/mcp` from a web page with a foreign `Origin` are refused.
-- **Security events** (sign-in requests, approvals, revocations, lockouts, refused requests, mode changes) are listed in Settings > Security.
+- **Security events** (sign-in requests, approvals, revocations, lockouts, refused requests, mode changes) are listed in the **Security** tab (shield button in the top bar).
 
 ### Encryption at rest
 - The Home Assistant token and the access token are encrypted with AES-256-GCM.
