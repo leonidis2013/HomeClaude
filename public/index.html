@@ -705,7 +705,7 @@
   function chips(list) { return '<div class="chips">' + list.map(function (c) { return '<span class="chip ' + (c[1] || '') + '">' + esc(c[0]) + '</span>'; }).join('') + '</div>'; }
   var PERMS = [['edit', 'Edit'], ['services', 'Services'], ['delete', 'Delete'], ['restart', 'Restart']];
   var LVL = [['read', 'Look only', 'Read everything: states, history, logs, traces, integrations, automation and script configs. Change nothing.'],
-    ['build', 'Help build', 'Also create and change automations, scripts and dashboards, and reload YAML. Every change is backed up and waits for your Keep or Revert.'],
+    ['build', 'Help build', 'Also create and change automations, scripts and dashboards, change Z-Wave device settings, and reload YAML. Every change waits for your Keep or Revert.'],
     ['hands', 'Hands on', 'Also run services: turn things on and off, run scripts, send notifications. This acts on the real home.'],
     ['full', 'Full', 'Also delete automations, scripts and dashboards, and restart Home Assistant (only after its config check passes). Only on your network, never from outside.']];
   var LVL_NAME = { read: 'Look only', build: 'Help build', hands: 'Hands on', full: 'Full' };
@@ -934,8 +934,8 @@
     $('#reviews').innerHTML = list.map(function (r) {
       var a = ACT[r.action] || [r.action, ''];
       var auto = r.autoAt ? '<span class="tm">' + (s.review.ifNoAnswer === 'revert' ? 'Reverts' : 'Kept') + ' automatically in <b data-until="' + Number(r.autoAt) + '">' + left(r.autoAt - Date.now()) + '</b></span>' : '<span class="tm">waiting for you</span>';
-      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : a[0]) + '</span>' + auto + '</div>' +
-        '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + (r.kind === 'organize' ? '' : ' · the old version is backed up') + '</div>' +
+      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : r.kind === 'zwave' ? 'changed Z-Wave settings: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : r.kind === 'zwave' ? 'Z-Wave' : a[0]) + '</span>' + auto + '</div>' +
+        '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + (r.kind === 'organize' ? '' : r.kind === 'zwave' ? ' · Revert sends the old values back (a sleeping device gets them when it next wakes up)' : ' · the old version is backed up') + '</div>' +
         (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(revLines(r, r.before), revLines(r, r.after)) + '</div>' : '') +
         '<div class="af"><button data-rvshow="' + r.rid + '">' + (rvOpen[r.rid] ? 'Hide changes' : 'Show changes') + '</button><span class="sp"></span>' +
         '<button class="danger" data-rvrevert="' + r.rid + '">Revert</button><button class="on" data-rvkeep="' + r.rid + '">Keep</button></div></div>';
@@ -945,8 +945,8 @@
     $$('[data-rvrevert]').forEach(function (b) {
       b.onclick = function () {
         var r = list.filter(function (x) { return x.rid === b.dataset.rvrevert; })[0];
-        var what = r.kind === 'organize' ? (r.action === 'created' ? 'removes what Claude created' : 'puts the labels and categories back the way they were') : r.kind === 'dashboard' ? (r.action === 'created' ? 'deletes the new dashboard' : r.action === 'deleted' ? 'brings the dashboard back' : 'puts the dashboard back the way it was before Claude\'s first change') : r.kind === 'esphome' ? 'puts the file back the way it was before Claude\'s first change (the device keeps running its firmware until someone installs again)' : r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
-        confirmBox('Revert ' + r.alias + '?', '<p>This ' + what + '. Home Assistant reloads it right away. The current version is backed up first.</p>', 'Revert', true).then(function (y) {
+        var what = r.kind === 'zwave' ? 'sends the old settings back to ' + r.alias + ' (a sleeping device gets them when it next wakes up)' : r.kind === 'organize' ? (r.action === 'created' ? 'removes what Claude created' : 'puts the labels and categories back the way they were') : r.kind === 'dashboard' ? (r.action === 'created' ? 'deletes the new dashboard' : r.action === 'deleted' ? 'brings the dashboard back' : 'puts the dashboard back the way it was before Claude\'s first change') : r.kind === 'esphome' ? 'puts the file back the way it was before Claude\'s first change (the device keeps running its firmware until someone installs again)' : r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
+        confirmBox('Revert ' + r.alias + '?', '<p>This ' + what + '.' + (r.kind === 'zwave' ? '' : ' Home Assistant reloads it right away. The current version is backed up first.') + '</p>', 'Revert', true).then(function (y) {
           if (!y) return;
           api('api/review', { rid: r.rid, keep: false }).then(function (j) { report(j, 'Could not revert'); if (j.ok) toast('Reverted', true); });
         });
@@ -1470,7 +1470,7 @@
       var a = s.access, cur = wzPick || ({ read: 'look', build: 'build', hands: 'hands', full: 'hands' })[a.local] || 'look';
       var P = [
         ['look', 'Look only', 'Claude can read everything (states, history, logs, traces, automations) and change nothing. Good to start with.', true],
-        ['build', 'Help build', 'Also create and change automations, scripts and dashboards, and reload YAML. Each change is backed up first and can be restored.'],
+        ['build', 'Help build', 'Also create and change automations, scripts and dashboards, change Z-Wave device settings, and reload YAML. Each change waits for your Keep or Revert.'],
         ['hands', 'Hands on', 'Also run services: turn things on and off, run scripts, send notifications. This acts on the real home.']
       ];
       pane.innerHTML = head('What may Claude change?') +

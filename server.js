@@ -214,10 +214,16 @@ function recordChange(info, who) {
     r = { rid: crypto.randomBytes(6).toString('hex'), kind: info.kind, id: String(info.id), before: clone(info.before), backup: info.backup || null, at: now, status: 'waiting', changes: 0 };
     // labels and categories: undone by the recorded steps of the first change
     if (info.revert) { r.revert = clone(info.revert); r.firstAction = info.action; }
+    if (info.revertKeys) r.revertKeys = clone(info.revertKeys);
     state.reviews.unshift(r);
+  } else if (info.merge && r.revert) {
+    // more settings changed on the same device: each keeps the value it had before Claude's first change
+    r.before = Object.assign({}, clone(info.before), r.before);
+    r.revertKeys = r.revertKeys || [];
+    (info.revert || []).forEach((m, i) => { const k = (info.revertKeys || [])[i]; if (k != null && !r.revertKeys.includes(k)) { r.revert.push(clone(m)); r.revertKeys.push(k); } });
   }
   r.alias = String(info.alias || r.alias || r.id).slice(0, 160);
-  r.after = clone(info.after); r.who = who && who.remote ? who.label : 'Claude'; r.where = who && who.remote ? 'outside' : 'home'; r.updatedAt = now; r.changes++;
+  r.after = info.merge ? Object.assign({}, r.after, clone(info.after)) : clone(info.after); r.who = who && who.remote ? who.label : 'Claude'; r.where = who && who.remote ? 'outside' : 'home'; r.updatedAt = now; r.changes++;
   r.action = r.revert ? r.firstAction : r.before ? (r.after ? 'changed' : 'deleted') : (r.after ? 'created' : null);
   if (!r.action) { r.status = 'withdrawn'; r.decidedAt = now; } // made and deleted again: nothing left to review
   r.autoAt = cfg.review.timeoutMin ? now + cfg.review.timeoutMin * 60e3 : null;

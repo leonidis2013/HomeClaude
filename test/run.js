@@ -268,7 +268,7 @@ test('ha client: REST and WebSocket against a fake Home Assistant', async () => 
     assert.strictEqual(c.version, '2026.10.2');
     assert.strictEqual(await ha.command({ type: 'ping' }), true);
     const entries = await ha.command({ type: 'config_entries/get' });
-    assert.strictEqual(entries.length, 4);
+    assert.strictEqual(entries.length, 5);
     const [a, b] = await Promise.all([ha.command({ type: 'system_log/list' }), ha.command({ type: 'config/area_registry/list' })]);
     assert.ok(a.length === 3 && b.length === 3, 'parallel commands are matched by id');
     await assert.rejects(ha.command({ type: 'trace/get', domain: 'automation', item_id: 'x', run_id: 'y' }), (e) => e.status === 404);
@@ -730,6 +730,87 @@ test('tools: dashboards', async () => {
   assert.ok(!full.ha.world.w.dashboards.length && full.backups.list()[0].reason === 'before-delete');
   const ro = toolsWith({});
   assert.ok(ro.t.list().some((x) => x.name === 'get_dashboard') && !ro.t.list().some((x) => x.name === 'save_dashboard'), 'reading at Look only, changing from Help build');
+});
+
+test('tools: Z-Wave devices, settings and their checks', async () => {
+  // read: listed for everyone, the change tool only with Help build
+  let { t, ha } = toolsWith({});
+  assert.ok(t.list().some((x) => x.name === 'list_zwave_devices') && t.list().some((x) => x.name === 'get_zwave_device'));
+  assert.ok(!t.list().some((x) => x.name === 'set_zwave_config'), 'hidden at Look only');
+  const all = parse(await t.call('list_zwave_devices', {}));
+  assert.strictEqual(all.total, 2);
+  const hall = all.devices.find((d) => d.name === 'Hallway Motion'), lock = all.devices.find((d) => d.name === 'Front Door Lock');
+  assert.ok(hall.battery === 100 && hall.status === 'asleep' && /sleeps/.test(hall.power) && /1 h \(3600 s\)/.test(hall.wake_up), JSON.stringify(hall));
+  assert.ok(/FLiRS/.test(lock.power) && !lock.wake_up, JSON.stringify(lock));
+  assert.strictEqual(parse(await t.call('list_zwave_devices', { battery_only: true })).total, 2, 'a FLiRS lock runs on batteries too');
+  const dev = parse(await t.call('get_zwave_device', { device: 'hallway motion' }));
+  assert.ok(dev.node_id === 13 && dev.wake_up.interval_s === 3600 && dev.wake_up.step_s === 600 && dev.radio.commandsTX === 412);
+  assert.strictEqual(dev.parameters.length, 7);
+  assert.ok(dev.parameters.find((p) => p.parameter === 101).value_label === 'Enable');
+  const byEntity = parse(await t.call('get_zwave_device', { device: 'sensor.hallway_motion_battery_level', query: 'report interval' }));
+  assert.ok(byEntity.parameters.length === 1 && byEntity.parameters[0].parameter === 40 && byEntity.parameters_total === 7);
+  assert.ok((await t.call('get_zwave_device', { device: 'Kitchen Light' })).isError, 'not a Z-Wave device');
+  assert.strictEqual(parse(await t.call('get_zwave_device', { device: 'Front Door Lock' })).wake_up, 'none: this device does not use wake-up');
+
+  ({ t, ha } = toolsWith({ edit: true }));
+  const z = ha.world.w.zwave;
+  const err = async (args, re) => { const r = await t.call('set_zwave_config', args); assert.ok(r.isError && re.test(r.text), r.text); };
+  await err({ device: 'Front Door Lock', parameters: [{ parameter: 3, value: 0 }] }, /lock is blocked/);
+  await err({ device: 'Hallway Motion', parameters: [{ parameter: 40, value: 30 }] }, /takes 60 to 86400 seconds/);
+  await err({ device: 'Hallway Motion', parameters: [{ parameter: 77, value: 1 }] }, /has no parameter 77/);
+  await err({ device: 'Hallway Motion', parameters: [{ parameter: 99, value: 1 }] }, /read-only/);
+  await err({ device: 'Hallway Motion', parameters: [{ parameter: 2, value: 0 }] }, /split into parts; give property_key: 255/);
+  await err({ device: 'Hallway Motion', parameters: [{ parameter: 101, value: 'Blink' }] }, /0 = Disable, 1 = Enable/);
+  await err({ device: 'Hallway Motion', wake_up_interval: 7000 }, /steps of 600 s .*6600.*7200/);
+  await err({ device: 'Hallway Motion', wake_up_interval: 100 }, /must be 600 to 86400/);
+  await err({ device: 'Hallway Motion', parameters: [{ parameter: 40, value: 21600 }, { parameter: 77, value: 1 }] }, /no parameter 77/);
+  assert.strictEqual(z.d5.params['13-112-0-40'].value, 3600, 'nothing sent when any part is wrong');
+  const r = parse(await t.call('set_zwave_config', { device: 'Hallway Motion', parameters: [{ parameter: 40, value: 21600 }, { parameter: 101, value: 'disable' }, { parameter: 2, property_key: 65280, value: 0 }, { parameter: 13, value: 11 }], wake_up_interval: 43200 }));
+  assert.strictEqual(r.changed.length, 4, JSON.stringify(r));
+  assert.ok(r.changed.filter((x) => x.parameter).every((x) => x.status === 'queued') && /next time it wakes/.test(r.note));
+  assert.ok(/already 11/.test(r.unchanged[0]));
+  assert.ok(z.d5.params['13-112-0-40'].value === 21600 && z.d5.params['13-112-0-101'].value === 0 && z.d5.params['13-112-0-2-65280'].value === 0 && z.d5.wake.value === 43200);
+  // nothing new: nothing sent
+  const again = parse(await t.call('set_zwave_config', { device: 'Hallway Motion', wake_up_interval: 43200 }));
+  assert.ok(!again.changed.length && /Nothing to change/.test(again.note));
+  // the lock can still be changed once locks are unblocked
+  ({ t, ha } = toolsWith({ edit: true, blocked: ['alarm_control_panel'] }));
+  assert.ok(!(await t.call('set_zwave_config', { device: 'Front Door Lock', parameters: [{ parameter: 3, value: 'Disable' }] })).isError);
+  assert.strictEqual(ha.world.w.zwave.d4.params['57-112-0-3'].value, 0);
+  await (async () => { const x = await t.call('set_zwave_config', { device: 'Front Door Lock', wake_up_interval: 3600 }); assert.ok(x.isError && /does not use wake-up/.test(x.text), x.text); })();
+});
+
+test('server: Z-Wave changes are reviewed and Revert sends the old values back', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('zw');
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const Z = f.world.w.zwave.d5;
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { local: 'build' });
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const call = async (name, args) => JSON.parse((await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, auth)).j.result.content[0].text);
+    const waiting = async () => (await req(port, 'GET', '/api/state')).j.reviews.filter((x) => x.status === 'waiting');
+    // two calls on one device: one review, every setting keeps its first old value
+    let r = await call('set_zwave_config', { device: 'Hallway Motion', parameters: [{ parameter: 40, value: 21600 }] });
+    assert.ok(/keep or revert/.test(r.review), JSON.stringify(r));
+    await call('set_zwave_config', { device: 'Hallway Motion', parameters: [{ parameter: 40, value: 43200 }, { parameter: 3, value: 120 }], wake_up_interval: 86400 });
+    let rv = await waiting();
+    assert.ok(rv.length === 1 && rv[0].kind === 'zwave' && rv[0].alias === 'Hallway Motion' && rv[0].changes === 2, JSON.stringify(rv));
+    assert.deepStrictEqual(rv[0].before, { 'Parameter 40: Periodic Reports Interval (seconds)': 3600, 'Parameter 3: Motion Untrigger Time (seconds)': 60, 'Wake-up interval (s)': 3600 });
+    assert.strictEqual(rv[0].after['Parameter 40: Periodic Reports Interval (seconds)'], 43200);
+    assert.ok(Z.params['13-112-0-40'].value === 43200 && Z.params['13-112-0-3'].value === 120 && Z.wake.value === 86400);
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.ok(Z.params['13-112-0-40'].value === 3600 && Z.params['13-112-0-3'].value === 60 && Z.wake.value === 3600, 'all back');
+    // kept: stays
+    await call('set_zwave_config', { device: 'Hallway Motion', wake_up_interval: 43200 });
+    rv = await waiting();
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: true })).j.ok);
+    assert.strictEqual(Z.wake.value, 43200);
+  } finally { proc.kill(); await f.close(); }
 });
 
 test('server: organizing is reviewed too, and permission changes are announced once', async () => {
