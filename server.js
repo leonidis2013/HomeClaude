@@ -254,7 +254,7 @@ async function decideReview(rid, keep, by) {
     try {
       if (r.kind === 'dashboard') await backupDashboardNow(r.id, r.alias, 'before-revert');
       // something already gone (deleted in Home Assistant meanwhile) is not a reason to stop
-      for (const m of r.revert) { try { await ha.command(m); } catch (e) { if (e.status !== 404) throw e; } }
+      for (const m of r.revert) { try { await tools.runStep(ha, m); } catch (e) { if (e.status !== 404) throw e; } }
       if (r.kind === 'dashboard') backupsChanged();
     }
     catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }

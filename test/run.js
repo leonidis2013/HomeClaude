@@ -268,7 +268,7 @@ test('ha client: REST and WebSocket against a fake Home Assistant', async () => 
     assert.strictEqual(c.version, '2026.10.2');
     assert.strictEqual(await ha.command({ type: 'ping' }), true);
     const entries = await ha.command({ type: 'config_entries/get' });
-    assert.strictEqual(entries.length, 5);
+    assert.strictEqual(entries.length, 6);
     const [a, b] = await Promise.all([ha.command({ type: 'system_log/list' }), ha.command({ type: 'config/area_registry/list' })]);
     assert.ok(a.length === 3 && b.length === 3, 'parallel commands are matched by id');
     await assert.rejects(ha.command({ type: 'trace/get', domain: 'automation', item_id: 'x', run_id: 'y' }), (e) => e.status === 404);
@@ -810,6 +810,104 @@ test('server: Z-Wave changes are reviewed and Revert sends the old values back',
     rv = await waiting();
     assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: true })).j.ok);
     assert.strictEqual(Z.wake.value, 43200);
+  } finally { proc.kill(); await f.close(); }
+});
+
+test('tools: helpers (UI helpers and template sensors)', async () => {
+  let { t } = toolsWith({});
+  assert.ok(!t.list().some((x) => x.name === 'save_helper'), 'hidden when looking only');
+  assert.ok(t.list().some((x) => x.name === 'list_helpers'));
+  ({ t } = toolsWith({ edit: true }));
+  assert.ok(!t.list().some((x) => x.name === 'delete_helper'), 'delete needs its own switch');
+  let l = parse(await t.call('list_helpers', {}));
+  assert.ok(l.helpers.some((x) => x.entity_id === 'input_datetime.furnace_filter_changed' && x.settings.has_date));
+  assert.ok(l.helpers.some((x) => x.type === 'template' && x.entity_ids[0] === 'sensor.furnace_filter_days_left' && x.editable));
+  // input_number: checked before it goes, then made
+  assert.ok(/needs min and max/.test((await t.call('save_helper', { type: 'input_number', name: 'Filter interval' })).text));
+  let r = parse(await t.call('save_helper', { type: 'input_number', name: 'Whole House Filter Interval', icon: 'mdi:calendar-sync', options: { min: 7, max: 365, step: 1, mode: 'box', unit_of_measurement: 'days', initial: 90 } }));
+  assert.ok(r.created && r.entity_id === 'input_number.whole_house_filter_interval', JSON.stringify(r));
+  assert.strictEqual(r.settings.max, 365);
+  r = parse(await t.call('save_helper', { type: 'input_datetime', name: 'Whole House Filter Last Changed', options: { has_date: true, has_time: false } }));
+  assert.strictEqual(r.entity_id, 'input_datetime.whole_house_filter_last_changed');
+  // change only what was given; Home Assistant's own check comes back as an error
+  r = parse(await t.call('save_helper', { helper: 'input_number.whole_house_filter_interval', options: { initial: 120, unit_of_measurement: null } }));
+  assert.ok(r.saved && r.settings.initial === 120 && r.settings.min === 7 && !('unit_of_measurement' in r.settings), JSON.stringify(r));
+  assert.ok(/not greater than minimum/.test((await t.call('save_helper', { helper: 'input_number.whole_house_filter_interval', options: { max: 5 } })).text));
+  assert.ok(/cannot be changed/.test((await t.call('save_helper', { helper: 'input_number.whole_house_filter_interval', type: 'counter', name: 'x' })).text));
+  assert.ok((await t.call('save_helper', { helper: 'light.kitchen', name: 'x' })).isError, 'not a helper');
+  // template sensor: made through Home Assistant's config flow
+  assert.ok(/needs options.state/.test((await t.call('save_helper', { type: 'template_sensor', name: 'Days left' })).text));
+  assert.ok(/not a setting of this helper.*unit_of_measurement/.test((await t.call('save_helper', { type: 'template_sensor', name: 'Days left', options: { state: '{{ 1 }}', colour: 'red' } })).text));
+  r = parse(await t.call('save_helper', { type: 'template_sensor', name: 'Whole House Filter Days Remaining', icon: 'mdi:timer-sand', options: { state: '{{ 40 + 50 }}', unit_of_measurement: 'Days', availability: '{{ true }}' } }));
+  assert.ok(r.created && r.entity_id === 'sensor.whole_house_filter_days_remaining' && r.state === '90', JSON.stringify(r));
+  let one = parse(await t.call('list_helpers', { helper: 'sensor.whole_house_filter_days_remaining' }));
+  assert.strictEqual(one.type, 'template_sensor');
+  assert.strictEqual(one.settings.state, '{{ 40 + 50 }}');
+  assert.strictEqual(one.settings.advanced_options.availability, '{{ true }}', 'section values land in their section');
+  assert.strictEqual(one.icon, 'mdi:timer-sand');
+  r = parse(await t.call('save_helper', { helper: 'sensor.whole_house_filter_days_remaining', name: 'Water filter days left', options: { state: '{{ 3 + 4 }}' } }));
+  assert.ok(r.saved && r.settings.state === '{{ 3 + 4 }}' && r.settings.unit_of_measurement === 'Days', 'other settings kept');
+  one = parse(await t.call('list_helpers', { helper: 'sensor.whole_house_filter_days_remaining' }));
+  assert.strictEqual(one.name, 'Water filter days left');
+  // blocked domains hold for helpers too
+  ({ t } = toolsWith({ edit: true, blocked: ['sensor'] }));
+  assert.ok(/blocked domain/.test((await t.call('save_helper', { type: 'template_sensor', name: 'X', options: { state: '{{ 1 }}' } })).text));
+  // delete
+  const W = Demo.createWorld();
+  ({ t } = toolsWith({ edit: true, delete: true }, W));
+  assert.ok(parse(await t.call('delete_helper', { helper: 'input_datetime.furnace_filter_changed' })).deleted);
+  assert.ok(!W.w.helpers.input_datetime.length && !W.w.states.some((x) => x.entity_id === 'input_datetime.furnace_filter_changed'));
+  assert.ok(parse(await t.call('delete_helper', { helper: 'sensor.furnace_filter_days_left' })).deleted);
+  assert.ok(!W.w.entries.some((x) => x.entry_id === 'e6'));
+});
+
+test('server: helper changes are reviewed and Revert undoes them', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('hp');
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const W = f.world.w;
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { local: 'full' });
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const call = async (name, args) => JSON.parse((await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, auth)).j.result.content[0].text);
+    const waiting = async () => (await req(port, 'GET', '/api/state')).j.reviews.filter((x) => x.status === 'waiting');
+    const revertAll = async () => { for (const x of await waiting()) assert.ok((await req(port, 'POST', '/api/review', { rid: x.rid, keep: false })).j.ok, x.alias); };
+    // made, then changed: one review, Revert deletes it
+    let r = await call('save_helper', { type: 'input_number', name: 'Filter interval', options: { min: 7, max: 365 } });
+    assert.ok(/keep or revert/.test(r.review), JSON.stringify(r));
+    await call('save_helper', { helper: r.entity_id, options: { initial: 90 } });
+    let rv = await waiting();
+    assert.ok(rv.length === 1 && rv[0].kind === 'helper' && rv[0].action === 'created' && rv[0].changes === 2, JSON.stringify(rv));
+    await revertAll();
+    assert.ok(!W.helpers.input_number.length && !W.states.some((x) => x.entity_id === 'input_number.filter_interval'), 'gone again');
+    // changed: Revert puts the old settings back
+    await call('save_helper', { helper: 'input_datetime.furnace_filter_changed', name: 'Furnace filter swapped', options: { has_time: true } });
+    await revertAll();
+    assert.deepStrictEqual(W.helpers.input_datetime[0], { id: 'furnace_filter_changed', name: 'Furnace filter changed', has_date: true, has_time: false, icon: 'mdi:air-filter' });
+    // template sensor: changed then reverted, made then reverted, deleted then brought back
+    await call('save_helper', { helper: 'sensor.furnace_filter_days_left', name: 'Other', options: { state: '{{ 1 + 1 }}', unit_of_measurement: null } });
+    assert.strictEqual(W.entries.find((x) => x.entry_id === 'e6').options.state, '{{ 1 + 1 }}');
+    await revertAll();
+    const e6 = W.entries.find((x) => x.entry_id === 'e6');
+    assert.ok(e6.title === 'Furnace filter days left' && e6.options.state === '{{ 34 }}' && e6.options.unit_of_measurement === 'd', JSON.stringify(e6));
+    r = await call('save_helper', { type: 'template_binary_sensor', name: 'Filter overdue', options: { state: '{{ false }}' } });
+    assert.strictEqual(r.entity_id, 'binary_sensor.filter_overdue');
+    await revertAll();
+    assert.ok(!W.states.some((x) => x.entity_id === 'binary_sensor.filter_overdue') && !W.entries.some((x) => x.entry_id === r.entry_id));
+    r = await call('delete_helper', { helper: 'sensor.furnace_filter_days_left' });
+    assert.ok(r.deleted && !W.entries.some((x) => x.entry_id === 'e6'));
+    await revertAll();
+    const back = W.entries.find((x) => x.domain === 'template' && x.title === 'Furnace filter days left');
+    assert.ok(back && back.options.state === '{{ 34 }}' && back.options.unit_of_measurement === 'd', 'made again with the same settings');
+    assert.ok(W.states.some((x) => x.entity_id === 'sensor.furnace_filter_days_left'), 'same entity_id');
+    r = await call('delete_helper', { helper: 'input_datetime.furnace_filter_changed' });
+    await revertAll();
+    assert.strictEqual(W.helpers.input_datetime[0].name, 'Furnace filter changed');
+    assert.ok(W.states.some((x) => x.entity_id === 'input_datetime.furnace_filter_changed'));
   } finally { proc.kill(); await f.close(); }
 });
 
