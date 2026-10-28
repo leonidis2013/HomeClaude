@@ -236,7 +236,12 @@ async function decideReview(rid, keep, by) {
   const r = state.reviews.find((x) => x.rid === rid);
   if (!r || r.status !== 'waiting') return { ok: false, error: 'That change was already answered' };
   if (!keep && r.revert) {
-    try { for (const m of r.revert) await ha.command(m); }
+    try {
+      if (r.kind === 'dashboard') await backupDashboardNow(r.id, r.alias, 'before-revert');
+      // something already gone (deleted in Home Assistant meanwhile) is not a reason to stop
+      for (const m of r.revert) { try { await ha.command(m); } catch (e) { if (e.status !== 404) throw e; } }
+      if (r.kind === 'dashboard') backupsChanged();
+    }
     catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }
   } else if (!keep) {
     try {
@@ -459,10 +464,48 @@ function newToken() {
   return r.ok ? { ok: true, token: t } : r;
 }
 
+// ---------- dashboards: backed up and restored through Home Assistant's WebSocket API ----------
+const dashUrl = (id) => (id === 'lovelace' ? null : id);
+async function dashboardNow(id) {
+  const list = (await ha.command({ type: 'lovelace/dashboards/list' })) || [];
+  const d = id === 'lovelace' ? { url_path: 'lovelace', title: 'Overview' } : list.find((x) => x.url_path === id) || null;
+  if (!d) return null;
+  let config = null;
+  try { config = await ha.command({ type: 'lovelace/config', url_path: dashUrl(id), force: false }); }
+  catch (e) { if (!(e.code === 'config_not_found' || /no config found/i.test(e.message))) throw e; }
+  return { d, config };
+}
+async function backupDashboardNow(id, alias, reason) {
+  const now = await dashboardNow(id);
+  if (!now) return;
+  const d = now.d;
+  backups.save('dashboard', id, { alias: d.title || alias, dashboard: id === 'lovelace' ? null : { url_path: d.url_path, title: d.title, icon: d.icon || null, show_in_sidebar: d.show_in_sidebar !== false, require_admin: !!d.require_admin }, config: now.config }, reason);
+}
+async function restoreDashboard(id, bk) {
+  const body = bk.config || {};
+  const now = await dashboardNow(id);
+  if (now) await backupDashboardNow(id, body.alias, 'before-restore');
+  if (!now && id !== 'lovelace') {
+    if (!body.dashboard) throw new Error('The backup does not say how the dashboard was set up');
+    const s = body.dashboard;
+    await ha.command({ type: 'lovelace/dashboards/create', url_path: s.url_path, title: s.title, icon: s.icon || undefined, show_in_sidebar: s.show_in_sidebar !== false, require_admin: !!s.require_admin });
+  }
+  if (body.config) await ha.command({ type: 'lovelace/config/save', url_path: dashUrl(id), config: body.config });
+  else if (now && now.config) await ha.command({ type: 'lovelace/config/delete', url_path: dashUrl(id) });
+}
+
 async function restore(b) {
   const kind = String(b.kind || ''), id = String(b.id || ''), file = String(b.file || '');
   const bk = backups.read(kind, id, file);
-  if (!bk || !bk.config) return { ok: false, error: 'That backup is gone' };
+  if (!bk || (!bk.config && kind !== 'dashboard')) return { ok: false, error: 'That backup is gone' };
+  if (kind === 'dashboard') {
+    try {
+      await restoreDashboard(id, bk);
+      backupsChanged();
+      logActivity({ t: Date.now(), tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
   try {
     let current = null;
     try { current = await ha.rest('GET', '/api/config/' + kind + '/config/' + encodeURIComponent(id)); } catch (e) { if (e.status !== 404) throw e; }

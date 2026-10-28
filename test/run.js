@@ -103,6 +103,14 @@ test('guard: automation and script configs', () => {
   assert.ok(Guard.checkConfig({ actions: [{ action: '{{ svc }}' }] }, BLOCK), 'templated service name');
 });
 
+test('guard: dashboard card actions', () => {
+  const show = { views: [{ cards: [{ type: 'tile', entity: 'lock.front_door' }, { type: 'button', entity: 'cover.garage_door', tap_action: { action: 'more-info' } }, { type: 'button', tap_action: { action: 'toggle' }, entity: 'light.kitchen' }] }] };
+  assert.strictEqual(Guard.checkDashboard(show, BLOCK), null, 'showing blocked entities is fine');
+  assert.ok(Guard.checkDashboard({ views: [{ sections: [{ cards: [{ type: 'button', tap_action: { action: 'perform-action', perform_action: 'lock.unlock', target: { entity_id: 'lock.front_door' } } }] }] }] }, BLOCK), 'button that unlocks');
+  assert.ok(Guard.checkDashboard({ views: [{ cards: [{ type: 'button', hold_action: { action: 'call-service', service: 'homeassistant.turn_on', service_data: { entity_id: 'cover.garage_door' } } }] }] }, BLOCK), 'old-style call-service aimed at a cover');
+  assert.strictEqual(Guard.checkDashboard({ views: [{ cards: [{ type: 'button', tap_action: { action: 'perform-action', perform_action: 'light.toggle', target: { entity_id: 'light.kitchen' } } }] }] }, BLOCK), null);
+});
+
 // ---------- MCP protocol ----------
 test('mcp: handshake, discover, tools, errors', async () => {
   const m = Mcp.create({ serverInfo: { name: 's', version: '1' }, instructions: 'hi', listTools: () => [{ name: 'a', description: 'd', inputSchema: { type: 'object' } }], callTool: async (n, a) => ({ text: 'got ' + JSON.stringify(a), isError: false }) });
@@ -668,6 +676,51 @@ test('tools: labels and categories', async () => {
   void seen;
 });
 
+test('tools: dashboards', async () => {
+  const { t, ha, backups } = toolsWith({ edit: true });
+  const W = ha.world.w;
+  const ld = parse(await t.call('list_dashboards', {}));
+  assert.strictEqual(ld.total, 2);
+  assert.ok(ld.dashboards[0].default && ld.dashboards[0].auto_generated, 'Overview is auto-generated');
+  assert.deepStrictEqual(ld.dashboards[1].views.map((v) => [v.path, v.type, v.cards]), [['main', 'masonry', 2], ['garage', 'sections', 2]]);
+  const g = parse(await t.call('get_dashboard', { dashboard: 'Home', view: 'garage' }));
+  assert.ok(g.view_index === 1 && g.view.title === 'Garage', 'one view, found by title of the dashboard and path of the view');
+  assert.ok(parse(await t.call('get_dashboard', {})).auto_generated);
+  assert.ok((await t.call('get_dashboard', { dashboard: 'nope' })).isError);
+  // replace one view, others untouched
+  const v = g.view; v.sections[0].cards.push({ type: 'tile', entity: 'switch.coffee_maker' });
+  const r = parse(await t.call('save_dashboard', { dashboard: 'dashboard-home', view: 'garage', view_config: v }));
+  assert.ok(r.saved && r.views[1].cards === 3 && r.backup);
+  assert.strictEqual(W.lovelace['dashboard-home'].views[0].title, 'Main');
+  assert.strictEqual(backups.list().filter((b) => b.kind === 'dashboard').length, 1);
+  // add a view at the front, then remove it
+  await t.call('save_dashboard', { dashboard: 'dashboard-home', view_config: { title: 'Lights', path: 'lights', cards: [] }, position: 0 });
+  assert.deepStrictEqual(W.lovelace['dashboard-home'].views.map((x) => x.path), ['lights', 'main', 'garage']);
+  assert.ok((await t.call('save_dashboard', { dashboard: 'dashboard-home', view_config: { title: 'Again', path: 'main' } })).isError, 'paths stay unique');
+  await t.call('save_dashboard', { dashboard: 'dashboard-home', view: 'lights', view_config: null });
+  assert.deepStrictEqual(W.lovelace['dashboard-home'].views.map((x) => x.path), ['main', 'garage']);
+  // the safety rules
+  const bad = await t.call('save_dashboard', { dashboard: 'dashboard-home', view: 'main', view_config: { title: 'Main', path: 'main', cards: [{ type: 'button', name: 'Open', tap_action: { action: 'perform-action', perform_action: 'cover.open_cover', target: { entity_id: 'cover.garage_door' } } }] } });
+  assert.ok(bad.isError && /blocked/.test(bad.text) && W.lovelace['dashboard-home'].views[0].cards.length === 2);
+  // auto-generated Overview: views cannot be patched, a whole config takes control
+  assert.ok((await t.call('save_dashboard', { view_config: { title: 'X' } })).isError);
+  const took = parse(await t.call('save_dashboard', { config: { views: [{ title: 'Home', cards: [{ type: 'tile', entity: 'light.porch' }] }] } }));
+  assert.ok(took.took_control && W.lovelace.lovelace.views.length === 1);
+  // create, rename, delete
+  const made = parse(await t.call('create_dashboard', { title: 'Garage', icon: 'mdi:garage', config: { views: [{ title: 'Doors', cards: [] }] } }));
+  assert.ok(made.created && made.dashboard.url_path === 'dashboard-garage' && W.lovelace['dashboard-garage'].views[0].title === 'Doors');
+  assert.ok((await t.call('create_dashboard', { title: 'X', url_path: 'nodash' })).isError, 'Home Assistant wants a dash');
+  await t.call('create_dashboard', { url_path: 'dashboard-garage', title: 'Garage & shop', show_in_sidebar: false });
+  assert.ok(W.dashboards.find((d) => d.url_path === 'dashboard-garage').title === 'Garage & shop' && !W.dashboards.find((d) => d.url_path === 'dashboard-garage').show_in_sidebar);
+  assert.ok(!t.list().some((x) => x.name === 'delete_dashboard'), 'deleting needs its own switch');
+  const full = toolsWith({ edit: true, delete: true });
+  assert.ok((await full.t.call('delete_dashboard', { dashboard: 'lovelace' })).isError, 'Overview stays');
+  assert.ok(parse(await full.t.call('delete_dashboard', { dashboard: 'Home' })).deleted);
+  assert.ok(!full.ha.world.w.dashboards.length && full.backups.list()[0].reason === 'before-delete');
+  const ro = toolsWith({});
+  assert.ok(ro.t.list().some((x) => x.name === 'get_dashboard') && !ro.t.list().some((x) => x.name === 'save_dashboard'), 'reading at Look only, changing from Help build');
+});
+
 test('server: organizing is reviewed too, and permission changes are announced once', async () => {
   const f = await fakeHa();
   const port = await freePort(), dir = tmp('org');
@@ -705,6 +758,55 @@ test('server: organizing is reviewed too, and permission changes are announced o
     assert.deepStrictEqual(W.reg.find((e) => e.entity_id === 'sensor.garage_freezer_temperature').labels, [], 'label taken off again');
     assert.ok((await req(port, 'POST', '/api/review', { rid: made.rid, keep: false })).j.ok);
     assert.ok(!W.labels.some((x) => x.name === 'Garage stuff'), 'new label removed again');
+  } finally { proc.kill(); await f.close(); }
+});
+
+test('server: dashboard changes are reviewed, reverted and restored', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('dash');
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const W = f.world.w;
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { local: 'full' });
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const call = async (name, args) => (await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, auth)).j.result.content[0].text;
+    const waiting = async () => (await req(port, 'GET', '/api/state')).j.reviews.filter((x) => x.status === 'waiting');
+    const original = JSON.parse(JSON.stringify(W.lovelace['dashboard-home']));
+    // two edits: one review, Revert goes back to the original
+    await call('save_dashboard', { dashboard: 'dashboard-home', view: 'main', view_config: { title: 'Main', path: 'main', cards: [] } });
+    await call('save_dashboard', { dashboard: 'dashboard-home', view: 'garage', view_config: null });
+    let rv = await waiting();
+    assert.ok(rv.length === 1 && rv[0].kind === 'dashboard' && rv[0].changes === 2);
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.deepStrictEqual(W.lovelace['dashboard-home'], original, 'reverted');
+    // taking control of Overview, reverted: auto-generated again
+    await call('save_dashboard', { config: { views: [{ title: 'Mine', cards: [] }] } });
+    rv = await waiting();
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.strictEqual(W.lovelace.lovelace, null, 'Overview builds itself again');
+    // created, then reverted: gone
+    await call('create_dashboard', { title: 'Shop', config: { views: [] } });
+    rv = await waiting();
+    assert.ok(rv[0].action === 'created' && (await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.ok(!W.dashboards.some((d) => d.url_path === 'dashboard-shop'));
+    // deleted, then reverted: back with its views
+    await call('delete_dashboard', { dashboard: 'dashboard-home' });
+    assert.ok(!W.dashboards.length);
+    rv = await waiting();
+    assert.ok(rv[0].action === 'deleted' && (await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.ok(W.dashboards.some((d) => d.url_path === 'dashboard-home' && d.title === 'Home') && W.lovelace['dashboard-home'].views.length === 2, 'back again');
+    // restore from the Backups page, even after the dashboard is gone
+    await call('delete_dashboard', { dashboard: 'dashboard-home' });
+    rv = await waiting();
+    await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: true });
+    const bk = (await req(port, 'GET', '/api/backups')).j.backups.find((b) => b.kind === 'dashboard' && b.reason === 'before-delete');
+    assert.ok(bk && bk.alias === 'Home');
+    assert.ok((await req(port, 'POST', '/api/restore', { kind: 'dashboard', id: bk.id, file: bk.file })).j.ok);
+    assert.deepStrictEqual(W.lovelace['dashboard-home'], original, 'restored with its settings and views');
   } finally { proc.kill(); await f.close(); }
 });
 
