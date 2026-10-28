@@ -452,6 +452,12 @@
         <div class="set"><div class="sl"><b>Status</b><span id="haStat"></span></div><div class="sc"><button id="haTest2">Test</button><button id="haSave" class="on">Save</button></div></div>
       </div>
       <div class="card">
+        <h2>ESPHome</h2>
+        <div class="set first"><div class="sl"><b>ESPHome device configs</b><span>Claude can read and validate the YAML of your ESPHome devices through the ESPHome Device Builder, and change it from Help build up (backed up, keep or revert). Never compiles or installs firmware, never sees secrets.yaml</span></div><div class="sc"><div class="seg" id="espOn"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set"><div class="sl"><b>Device Builder address</b><span>Leave empty to use the ESPHome Device Builder app in Home Assistant (through Home Assistant, nothing to open). Only for a standalone Device Builder without a password, for example http://192.168.1.10:6052</span></div><div class="sc"><input id="espUrl" class="txt wide" placeholder="Through Home Assistant" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="ESPHome Device Builder address"><button id="espSave" class="on">Save</button></div></div>
+        <div class="set"><div class="sl"><b>Status</b><span id="espStat"></span></div><div class="sc"><button id="espTest">Test</button></div></div>
+      </div>
+      <div class="card">
         <h2>Making the token</h2>
         <ol class="steps">
           <li>In Home Assistant, go to <b>Settings &gt; People &gt; Users</b> and add a user just for Claude, for example <b>Claude</b>. Turn on <b>Administrator</b>: logs, traces, integrations and automation configs are only open to administrators.</li>
@@ -496,7 +502,7 @@
       </div>
       <div class="card">
         <h2>Review Claude's changes</h2>
-        <div class="set first"><div class="sl"><b>Ask me to keep or revert</b><span>Each change to an automation, script or dashboard goes live at once, is backed up, and waits on the dashboard for Keep or Revert. Revert puts back the version from before Claude's first change</span></div><div class="sc"><div class="seg" id="rvOn"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
+        <div class="set first"><div class="sl"><b>Ask me to keep or revert</b><span>Each change to an automation, script, dashboard or ESPHome config goes live at once, is backed up, and waits on the dashboard for Keep or Revert. Revert puts back the version from before Claude's first change</span></div><div class="sc"><div class="seg" id="rvOn"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>
         <div class="set"><div class="sl"><b>If I don't answer within</b><span>Like a display-settings check: no answer, and the change is decided for you</span></div><div class="sc"><select id="rvTime" aria-label="Time to answer"><option value="0">No limit (wait for me)</option><option value="15">15 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">24 hours</option></select><div class="seg" id="rvWhat"><button data-v="revert">Revert it</button><button data-v="keep">Keep it</button></div></div></div>
       </div>
       <div class="card">
@@ -581,7 +587,7 @@
   // ---------- state ----------
   var snap = null, lastMsg = 0, pin = '', inSetup = false, inWizard = false, inSecurity = false, token = '';
   try { pin = sessionStorage.getItem('hc-pin') || ''; } catch (e) {}
-  var haLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null, apSig = '', apScope = {}, connSig = '';
+  var haLoaded = false, espLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null, apSig = '', apScope = {}, connSig = '';
 
   var toastEl = $('#toast'), toastTimer;
   function toast(msg, good) {
@@ -811,6 +817,12 @@
     $('#haTok').placeholder = s.ha.hasToken ? 'Saved (type to replace)' : 'Paste the token';
     $('#haStat').innerHTML = !st.configured ? 'Not set up yet' : st.checking ? 'Checking…' : st.ok ? '<span style="color:var(--ok)">Connected to Home Assistant ' + esc(st.version) + (st.name ? ' (' + esc(st.name) + ')' : '') + '</span>' : '<span style="color:var(--bad)">' + esc(st.error || 'Not reachable') + '</span>';
     $('#haUrl').disabled = $('#haTok').disabled = $('#haSave').disabled = !!s.demo;
+    // ESPHome
+    var es = s.esphome || {}, ess = es.status || {};
+    paintSeg($('#espOn'), es.enabled ? '1' : '0');
+    if (!espLoaded) { $('#espUrl').value = es.url || ''; espLoaded = true; }
+    $('#espUrl').disabled = $('#espSave').disabled = !!s.demo || !es.enabled;
+    $('#espStat').innerHTML = !es.enabled ? 'Off: Claude does not see the ESPHome tools' : !ess.checkedAt ? 'Not checked yet' : ess.ok ? '<span style="color:var(--ok)">' + esc(plural(ess.devices || 0, 'device')) + ' via ' + esc(ess.via || 'ESPHome') + (ess.version ? ' (Device Builder ' + esc(ess.version) + ')' : '') + '</span>' : '<span style="color:var(--bad)">' + esc(ess.error || 'Not reachable') + '</span>';
     // Claude pane
     var wsig = (s.security && s.security.mode) + s.publicUrl + (s.security && s.security.allowTokenRemote);
     if ($('#webConn').dataset.sig !== wsig) { $('#webConn').dataset.sig = wsig; $('#webConn').innerHTML = webSteps(s, 'w'); }
@@ -829,7 +841,7 @@
     renderWho(s);
     if (!blkLoaded) { $('#pBlocked').value = a.blocked.join(', '); blkLoaded = true; }
     $('#toolList').innerHTML = (s.tools || []).map(function (t) {
-      return '<div class="tl' + (t.on ? '' : ' off') + '"><b>' + esc(t.name) + '</b><span>' + esc(t.title) + '</span>' + (t.needs ? '<span class="chip ' + (t.on ? 'w' : '') + '">' + (t.on ? 'change' : 'off') + '</span>' : '<span class="chip o">read</span>') + '</div>';
+      return '<div class="tl' + (t.on ? '' : ' off') + '"><b>' + esc(t.name) + '</b><span>' + esc(t.title) + '</span>' + (t.needs && t.needs !== 'esphome' ? '<span class="chip ' + (t.on ? 'w' : '') + '">' + (t.on ? 'change' : 'off') + '</span>' : t.on ? '<span class="chip o">read</span>' : '<span class="chip">off</span>') + '</div>';
     }).join('');
     // activity
     $('#actNote').textContent = s.activityTotal ? 'Newest first. Showing ' + Math.min(60, s.activityTotal) + ' of ' + s.activityTotal + ' kept (the last 300).' : '';
@@ -906,6 +918,12 @@
     if (skipped) h += '<div class="gap">… ' + plural(skipped, 'line') + ' unchanged</div>';
     return h || '<div class="gap">No difference</div>';
   }
+  // ESPHome: the file's own lines, with inline keys and passwords masked on screen
+  function revLines(r, v) {
+    if (!v) return [];
+    if (r.kind !== 'esphome') return yamlLines(v);
+    return String(v.content || '').split('\n').map(function (l) { return /^\s*#/.test(l) ? l : l.replace(/^(\s*(?:-\s+)?(?:key|psk|password|[a-z0-9_]*_password|api_key|access_token|token)\s*:\s*)(?!!secret)(?!!lambda)(\S.*)$/i, '$1••••••'); });
+  }
   var rvSig = '', rvOpen = {};
   var ACT = { changed: ['changed', 'acc'], created: ['created', 'o'], deleted: ['deleted', 'b'] };
   function renderReviews(s) {
@@ -916,9 +934,9 @@
     $('#reviews').innerHTML = list.map(function (r) {
       var a = ACT[r.action] || [r.action, ''];
       var auto = r.autoAt ? '<span class="tm">' + (s.review.ifNoAnswer === 'revert' ? 'Reverts' : 'Kept') + ' automatically in <b data-until="' + Number(r.autoAt) + '">' + left(r.autoAt - Date.now()) + '</b></span>' : '<span class="tm">waiting for you</span>';
-      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'dashboard' ? 'a dashboard' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : a[0]) + '</span>' + auto + '</div>' +
+      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : a[0]) + '</span>' + auto + '</div>' +
         '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + (r.kind === 'organize' ? '' : ' · the old version is backed up') + '</div>' +
-        (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(r.before ? yamlLines(r.before) : [], r.after ? yamlLines(r.after) : []) + '</div>' : '') +
+        (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(revLines(r, r.before), revLines(r, r.after)) + '</div>' : '') +
         '<div class="af"><button data-rvshow="' + r.rid + '">' + (rvOpen[r.rid] ? 'Hide changes' : 'Show changes') + '</button><span class="sp"></span>' +
         '<button class="danger" data-rvrevert="' + r.rid + '">Revert</button><button class="on" data-rvkeep="' + r.rid + '">Keep</button></div></div>';
     }).join('');
@@ -927,7 +945,7 @@
     $$('[data-rvrevert]').forEach(function (b) {
       b.onclick = function () {
         var r = list.filter(function (x) { return x.rid === b.dataset.rvrevert; })[0];
-        var what = r.kind === 'organize' ? (r.action === 'created' ? 'removes what Claude created' : 'puts the labels and categories back the way they were') : r.kind === 'dashboard' ? (r.action === 'created' ? 'deletes the new dashboard' : r.action === 'deleted' ? 'brings the dashboard back' : 'puts the dashboard back the way it was before Claude\'s first change') : r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
+        var what = r.kind === 'organize' ? (r.action === 'created' ? 'removes what Claude created' : 'puts the labels and categories back the way they were') : r.kind === 'dashboard' ? (r.action === 'created' ? 'deletes the new dashboard' : r.action === 'deleted' ? 'brings the dashboard back' : 'puts the dashboard back the way it was before Claude\'s first change') : r.kind === 'esphome' ? 'puts the file back the way it was before Claude\'s first change (the device keeps running its firmware until someone installs again)' : r.action === 'created' ? 'deletes the new ' + r.kind : r.action === 'deleted' ? 'brings the ' + r.kind + ' back' : 'puts back the version from before Claude\'s change';
         confirmBox('Revert ' + r.alias + '?', '<p>This ' + what + '. Home Assistant reloads it right away. The current version is backed up first.</p>', 'Revert', true).then(function (y) {
           if (!y) return;
           api('api/review', { rid: r.rid, keep: false }).then(function (j) { report(j, 'Could not revert'); if (j.ok) toast('Reverted', true); });
@@ -1134,7 +1152,7 @@
   function loadBackups() {
     fetch('api/backups', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
       var list = j.backups || [];
-      if (!list.length) { $('#bkList').innerHTML = '<div class="note">' + (snap && snap.demo ? 'Demo mode keeps no backups.' : 'No backups yet. They appear when Claude changes or deletes an automation, script or dashboard.') + '</div>'; return; }
+      if (!list.length) { $('#bkList').innerHTML = '<div class="note">' + (snap && snap.demo ? 'Demo mode keeps no backups.' : 'No backups yet. They appear when Claude changes or deletes an automation, script, dashboard or ESPHome config.') + '</div>'; return; }
       $('#bkList').innerHTML = list.map(function (b, i) {
         return '<div class="bk"><span><b>' + esc(b.alias || b.id) + '</b> <small>' + esc(b.kind) + ' ' + esc(b.id) + '</small><br><small>' + esc(when(b.savedAt)) + ' · ' + esc(String(b.reason).replace(/-/g, ' ')) + '</small></span>' +
           '<button data-dl="' + i + '">Download</button><button data-rs="' + i + '">Restore</button></div>';
@@ -1159,6 +1177,9 @@
   }
   $('#haTest').onclick = function () { testHa(this); };
   $('#haTest2').onclick = function () { testHa(this); };
+  $$('#espOn button').forEach(function (b) { b.onclick = function () { api('api/esphome', { enabled: b.dataset.v === '1' }).then(function (j) { report(j, 'Could not save'); }); }; });
+  $('#espSave').onclick = function () { api('api/esphome', { url: $('#espUrl').value }).then(function (j) { report(j, 'Could not save'); if (j.ok) { espLoaded = false; toast('Saved. Testing…', true); } }); };
+  $('#espTest').onclick = function () { var b = this; b.disabled = true; api('api/esphome-test', {}).then(function (j) { b.disabled = false; if (j.ok) toast('Found ' + plural(j.devices || 0, 'device'), true); else report(j, 'Could not reach the ESPHome Device Builder'); }); };
   $('#chkAll').onclick = function () { api('api/ha-test', {}).then(function (j) { if (!j.ok) report(j, 'Could not reach Home Assistant'); }); };
   $('#haOpen').onclick = function () { if (snap && snap.ha.url) window.open(snap.ha.url, '_blank', 'noopener'); };
   $('#haSave').onclick = function () {
@@ -1545,7 +1566,7 @@
     subPane = name; try { localStorage.setItem('hc-sub', name); } catch (e) {}
     $$('#sub button').forEach(function (b) { b.classList.toggle('on', b.dataset.sub === name); });
     $$('[data-pane]').forEach(function (p) { p.classList.toggle('hide', p.dataset.pane !== name); });
-    if (name === 'ha') haLoaded = false;
+    if (name === 'ha') haLoaded = espLoaded = false;
     if (name === 'perm') { blkLoaded = false; whoSig = ''; }
     if (name === 'backups') { bkSig = null; }
     if (name === 'settings') { keepLoaded = false; paintSeg($('#themeSeg'), themePref); }

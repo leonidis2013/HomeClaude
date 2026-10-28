@@ -11,7 +11,7 @@ const { spawn } = require('child_process');
 
 const root = path.join(__dirname, '..');
 const R = (p) => require(path.join(root, p));
-const Guard = R('lib/guard'), Mcp = R('lib/mcp'), Tools = R('lib/tools'), Demo = R('lib/demo'), Backups = R('lib/backups'), Ha = R('lib/ha');
+const Guard = R('lib/guard'), Mcp = R('lib/mcp'), Tools = R('lib/tools'), Demo = R('lib/demo'), Backups = R('lib/backups'), Ha = R('lib/ha'), Esp = R('lib/esphome');
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -22,7 +22,8 @@ function toolsWith(access, world) {
   const a = Object.assign({ edit: false, services: false, delete: false, restart: false, blocked: BLOCK }, access);
   const ha = Demo.client(world);
   const backups = Backups.create({ dir: tmp('bk'), keep: 3 });
-  return { t: Tools.create({ ha, backups, access: () => a, settleMs: 5 }), ha, backups, a };
+  const esphome = Demo.esphome();
+  return { t: Tools.create({ ha, backups, esphome, access: () => a, settleMs: 5 }), ha, backups, a, esphome };
 }
 const parse = (r) => JSON.parse(r.text);
 
@@ -31,6 +32,16 @@ function fakeHa(opts = {}) {
   const world = Demo.createWorld();
   const TOKEN = opts.token || 'good-token';
   const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/api/hassio_ingress/')) {
+      let raw = '';
+      req.on('data', (d) => { raw += d; });
+      req.on('end', () => {
+        const r = world.ingress(req.method, req.url, req.headers.cookie, raw);
+        res.writeHead(r.status, { 'content-type': typeof r.body === 'string' ? 'text/plain' : 'application/json' });
+        res.end(typeof r.body === 'string' ? r.body : JSON.stringify(r.body));
+      });
+      return;
+    }
     if (req.headers.authorization !== 'Bearer ' + TOKEN) { res.writeHead(401, { 'content-type': 'application/json' }); return res.end('{"message":"401: Unauthorized"}'); }
     let raw = '';
     req.on('data', (d) => { raw += d; });
@@ -898,6 +909,121 @@ test('server: token, origin, access switch, PIN, live Home Assistant settings', 
     proc.kill();
     await f.close();
   }
+});
+
+test('esphome: hidden values, blocked actions, file names', () => {
+  const raw = 'api:\n  encryption:\n    key: "abc="\nota:\n  - platform: esphome\n    password: hunter2\nwifi:\n  password: !secret wifi_password\n  ap:\n    password: "x1"\n# key: comment\n';
+  const h = Esp.hide(raw);
+  assert.strictEqual(h.hidden, 3);
+  assert.ok(!/abc=|hunter2|x1/.test(h.text) && /!secret wifi_password/.test(h.text) && /# key: comment/.test(h.text));
+  assert.strictEqual(Esp.unhide(h.text, raw), raw, 'put back exactly');
+  // a line moved or added around them still gets its own value back, by order per key
+  assert.strictEqual(Esp.unhide(h.text.replace('ota:', 'logger:\nota:'), raw), raw.replace('ota:', 'logger:\nota:'));
+  assert.throws(() => Esp.unhide(h.text + 'mqtt:\n  password: "' + Esp.HIDDEN + '"\n', raw), /!secret/);
+  assert.strictEqual(Esp.blockedActions('on_press:\n  - homeassistant.action:\n      action: lock.unlock\n', BLOCK), 'action: lock.unlock');
+  assert.strictEqual(Esp.blockedActions('  - homeassistant.service:\n      service: light.turn_on\n', BLOCK), null);
+  assert.strictEqual(Esp.checkFile('ro-water.yaml'), 'ro-water.yaml');
+  ['secrets.yaml', 'Secrets.yml', '../x.yaml', 'a/b.yaml', '.hidden.yaml', 'x.txt', ''].forEach((f) => assert.throws(() => Esp.checkFile(f), undefined, f));
+});
+
+test('tools: esphome read, validate and save', async () => {
+  const off = toolsWith({ edit: true });
+  assert.ok(!off.t.list().some((x) => /esphome/.test(x.name)), 'hidden while ESPHome is off');
+  const ro = toolsWith({ esphome: true });
+  assert.deepStrictEqual(ro.t.list().filter((x) => /esphome/.test(x.name)).map((x) => x.name), ['list_esphome_devices', 'get_esphome_config', 'validate_esphome_config'], 'look only: no save');
+  const { t, backups, esphome } = toolsWith({ edit: true, esphome: true, esphomeEdit: true });
+  const files = esphome.builder.files;
+  const list = parse(await t.call('list_esphome_devices', {}));
+  assert.ok(list.count === 2 && list.secret_names.includes('wifi_password') && !JSON.stringify(list).includes('not-for-claude'));
+  assert.ok((await t.call('get_esphome_config', { configuration: 'secrets.yaml' })).isError);
+  // saving needs a read first
+  assert.match((await t.call('save_esphome_config', { configuration: 'ro-water.yaml', content: 'esphome:\n  name: x\n' })).text, /Read ro-water\.yaml/);
+  const got = parse(await t.call('get_esphome_config', { configuration: 'ro-water.yaml' }));
+  assert.ok(got.hidden_values === 2 && !got.content.includes('0123456789abcdef'));
+  const before = files['ro-water.yaml'];
+  // a valid change keeps the hidden values, is backed up and validated
+  const next = got.content.replace('name: "RO flow"', 'name: "RO flow"\n    total:\n      name: "RO total"');
+  const saved = parse(await t.call('save_esphome_config', { configuration: 'ro-water.yaml', content: next }));
+  assert.ok(saved.saved && saved.validation.valid && saved.backup, JSON.stringify(saved));
+  assert.ok(files['ro-water.yaml'].includes('RO total') && files['ro-water.yaml'].includes('0123456789abcdef') && files['ro-water.yaml'].includes('q1w2e3r4'));
+  assert.strictEqual(backups.read('esphome', 'ro-water.yaml', saved.backup).config.content, before);
+  // an invalid one is put back, with the errors
+  const now = files['ro-water.yaml'];
+  const bad = parse(await t.call('save_esphome_config', { configuration: 'ro-water.yaml', content: next.replace('pulse_meter', 'nonsense_meter') }));
+  assert.ok(!bad.saved && bad.put_back && !bad.validation.valid && /Platform not found/.test(bad.validation.output) && !/\u001b/.test(bad.validation.output));
+  assert.strictEqual(files['ro-water.yaml'], now, 'old file back');
+  // ...unless asked to keep it
+  const kept = parse(await t.call('save_esphome_config', { configuration: 'ro-water.yaml', content: next.replace('pulse_meter', 'nonsense_meter'), keep_if_invalid: true }));
+  assert.ok(kept.saved && kept.validation.valid === false);
+  // changed behind Claude's back: refused until read again
+  files['ro-water.yaml'] += '\nlogger:\n';
+  assert.match((await t.call('save_esphome_config', { configuration: 'ro-water.yaml', content: next })).text, /changed since you read it/);
+  // blocked domains
+  const g = parse(await t.call('get_esphome_config', { configuration: 'garage-sensor.yaml' }));
+  const r = await t.call('save_esphome_config', { configuration: 'garage-sensor.yaml', content: g.content + 'binary_sensor:\n  - platform: gpio\n    pin: D1\n    on_press:\n      - homeassistant.action:\n          action: cover.open_cover\n' });
+  assert.ok(r.isError && /blocked domain/.test(r.text));
+  assert.ok(!files['garage-sensor.yaml'].includes('cover'));
+  assert.ok(parse(await t.call('validate_esphome_config', { configuration: 'garage-sensor.yaml' })).valid);
+});
+
+test('esphome: reached through Home Assistant ingress, with a fresh session when one ends', async () => {
+  const f = await fakeHa();
+  try {
+    const ha = Ha.create({ getUrl: () => f.url, getToken: () => 'good-token' });
+    const e = Esp.create({ ha, settings: () => ({ enabled: true, url: '' }) });
+    const s = await e.check();
+    assert.ok(s.ok && s.via === 'ESPHome Device Builder' && s.devices === 2, JSON.stringify(s));
+    assert.match(await e.read('garage-sensor.yaml'), /garage-sensor/);
+    f.world.w.sessions.clear(); // the Supervisor ended the session
+    assert.strictEqual((await e.devices()).devices.length, 2);
+    assert.strictEqual(f.world.w.sessionCount, 2, 'a new session, once');
+    const off = Esp.create({ ha, settings: () => ({ enabled: false, url: '' }) });
+    await assert.rejects(off.devices(), /switched off/);
+    const gone = Esp.create({ ha, settings: () => ({ enabled: true, url: f.url + '/nothing' }) });
+    await assert.rejects(gone.devices(), /no MCP endpoint|Device Builder/);
+    ha.reset();
+  } finally { await f.close(); }
+});
+
+test('server: ESPHome changes are reviewed, reverted and restored', async () => {
+  const f = await fakeHa();
+  const port = await freePort(), dir = tmp('esp');
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(await freePort()), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' });
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  const files = f.world.w.builder.files;
+  try {
+    for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+    await req(port, 'POST', '/api/ha', { url: f.url, token: 'good-token' });
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const names = async () => (await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, auth)).j.result.tools.map((x) => x.name);
+    const call = async (name, args) => (await req(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, auth)).j.result.content[0].text;
+    let n = await names();
+    assert.ok(n.includes('get_esphome_config') && !n.includes('save_esphome_config'), 'Look only reads ESPHome');
+    await req(port, 'POST', '/api/access', { local: 'build' });
+    assert.ok((await names()).includes('save_esphome_config'));
+    const t = await req(port, 'POST', '/api/esphome-test', {});
+    assert.ok(t.j.ok && t.j.devices === 2, JSON.stringify(t.j));
+    assert.ok((await req(port, 'GET', '/api/state')).j.esphome.status.ok);
+    const original = files['ro-water.yaml'];
+    const got = JSON.parse(await call('get_esphome_config', { configuration: 'ro-water.yaml' }));
+    const saved = JSON.parse(await call('save_esphome_config', { configuration: 'ro-water.yaml', content: got.content + 'logger:\n  level: DEBUG\n' }));
+    assert.ok(saved.saved && saved.review, JSON.stringify(saved));
+    const rv = (await req(port, 'GET', '/api/state')).j.reviews.filter((x) => x.status === 'waiting');
+    assert.ok(rv.length === 1 && rv[0].kind === 'esphome' && rv[0].id === 'ro-water.yaml');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv[0].rid, keep: false })).j.ok);
+    assert.strictEqual(files['ro-water.yaml'], original, 'reverted');
+    // restore from the Backups page: the version from before the revert
+    const bk = (await req(port, 'GET', '/api/backups')).j.backups.find((b) => b.kind === 'esphome' && b.reason === 'before-revert');
+    assert.ok(bk && bk.alias === 'ro-water.yaml');
+    assert.ok((await req(port, 'POST', '/api/restore', { kind: 'esphome', id: bk.id, file: bk.file })).j.ok);
+    assert.ok(files['ro-water.yaml'].includes('level: DEBUG'));
+    // switched off: the tools go away
+    assert.ok((await req(port, 'POST', '/api/esphome', { enabled: false })).j.ok);
+    n = await names();
+    assert.ok(!n.some((x) => /esphome/.test(x)));
+    assert.ok(!(await req(port, 'POST', '/api/esphome', { url: 'not an address' })).j.ok);
+  } finally { proc.kill(); await f.close(); }
 });
 
 // ---------- run ----------

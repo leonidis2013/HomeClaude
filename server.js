@@ -22,6 +22,7 @@ const Backups = require('./lib/backups.js');
 const Guard = require('./lib/guard.js');
 const Mcp = require('./lib/mcp.js');
 const Tools = require('./lib/tools.js');
+const Esp = require('./lib/esphome.js');
 const Health = require('./lib/health.js');
 const Net = require('./lib/netsec.js');
 const OAuth = require('./lib/oauth.js');
@@ -51,6 +52,8 @@ const DEFAULTS = {
   publicUrl: '',
   backup: { keep: 30 },
   review: { enabled: true, timeoutMin: 0, ifNoAnswer: 'revert' },
+  // ESPHome device configs through the ESPHome Device Builder. url: a standalone Device Builder; empty = the Home Assistant app
+  esphome: { enabled: true, url: '' },
   security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '', accessDefault: 'none', totp: { enabled: false, secret: '', pending: '', since: 0, lastCounter: 0, maxScope: 'build', off: false } },
   setup: { completed: false, marks: {} }
 };
@@ -80,7 +83,7 @@ const savedCfg = DEMO ? {} : readJson(cfgPath, {});
 let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), savedCfg);
 // installs from before the setup guide already went through setup
 if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: true, marks: {} };
-['ha', 'access', 'backup', 'setup', 'security', 'review'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
+['ha', 'access', 'backup', 'setup', 'security', 'review', 'esphome'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
 // ---------- permission levels ----------
 const LEVELS = ['read', 'build', 'hands', 'full'];
@@ -97,7 +100,9 @@ function accessFor(level, remote) {
   let l = LEVELS.includes(level) ? level : 'read';
   if (remote) l = lowerLevel(lowerLevel(l, cfg.access.outsideMax), 'hands');
   const f = LEVEL_FLAGS[l];
-  return { enabled: cfg.access.enabled, blocked: cfg.access.blocked, level: l, edit: !!f.edit, services: !!f.services, delete: !!f.delete, restart: !!f.restart };
+  // ESPHome: reading and validating come with every level while ESPHome is on; changing configs with Help build and up
+  const esp = !!cfg.esphome.enabled;
+  return { enabled: cfg.access.enabled, blocked: cfg.access.blocked, level: l, edit: !!f.edit, services: !!f.services, delete: !!f.delete, restart: !!f.restart, esphome: esp, esphomeEdit: esp && !!f.edit };
 }
 const localAccess = () => accessFor(cfg.access.local, false);
 if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
@@ -194,7 +199,8 @@ function pinOk(given) {
 // ---------- Home Assistant ----------
 const ha = DEMO ? require('./lib/demo.js').client() : Ha.create({ getUrl: () => cfg.ha.url, getToken: () => secrets.dec(cfg.ha.token) });
 const backups = Backups.create({ dir: path.join(dataDir, 'backups'), keep: () => cfg.backup.keep });
-const tools = Tools.create({ ha, backups, access: localAccess, onChange: (info, who) => recordChange(info, who), reviewInfo: () => reviewInfo() });
+const esphome = DEMO ? require('./lib/demo.js').esphome() : Esp.create({ ha, settings: () => cfg.esphome, version: pkg.version });
+const tools = Tools.create({ ha, backups, esphome, access: localAccess, onChange: (info, who) => recordChange(info, who), reviewInfo: () => reviewInfo() });
 
 // ---------- keep or revert: every change Claude makes goes live, and you decide afterwards ----------
 const REVIEW_TIMES = [0, 15, 60, 240, 1440];
@@ -235,7 +241,10 @@ function reviewInfo() {
 async function decideReview(rid, keep, by) {
   const r = state.reviews.find((x) => x.rid === rid);
   if (!r || r.status !== 'waiting') return { ok: false, error: 'That change was already answered' };
-  if (!keep && r.revert) {
+  if (!keep && r.kind === 'esphome') {
+    try { await putEsphome(r.id, r.before && r.before.content, 'before-revert'); backupsChanged(); }
+    catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }
+  } else if (!keep && r.revert) {
     try {
       if (r.kind === 'dashboard') await backupDashboardNow(r.id, r.alias, 'before-revert');
       // something already gone (deleted in Home Assistant meanwhile) is not a reason to stop
@@ -417,7 +426,18 @@ function setHa(b) {
     if (b.token != null && String(b.token).trim()) c.ha.token = secrets.enc(String(b.token).trim().slice(0, 1000));
     if (b.clearToken) c.ha.token = '';
   });
-  if (r.ok) { ha.reset(); checkHa(); }
+  if (r.ok) { ha.reset(); esphome.forget(); checkHa(); }
+  return r;
+}
+
+function setEsphome(b) {
+  const url = clean(b.url == null ? cfg.esphome.url : b.url, 300).replace(/\/+$/, '');
+  if (url && !/^https?:\/\/[^\s/]+(:\d+)?(\/[^\s]*)?$/i.test(url)) return { ok: false, error: 'The address should look like http://192.168.1.10:6052, or leave it empty to use the ESPHome app in Home Assistant' };
+  const r = changeConfig((c) => {
+    if (typeof b.enabled === 'boolean') c.esphome.enabled = b.enabled;
+    c.esphome.url = url;
+  });
+  if (r.ok) { esphome.forget(); if (cfg.esphome.enabled) esphome.check().then(broadcastSoon); else broadcastSoon(); }
   return r;
 }
 
@@ -494,10 +514,27 @@ async function restoreDashboard(id, bk) {
   else if (now && now.config) await ha.command({ type: 'lovelace/config/delete', url_path: dashUrl(id) });
 }
 
+/** Puts an ESPHome file back to the given text, backing up what is there now. */
+async function putEsphome(file, content, reason) {
+  if (typeof content !== 'string') throw new Error('Nothing to put back');
+  const now = await esphome.read(file);
+  if (now === content) return;
+  backups.save('esphome', file, { alias: file, content: now }, reason);
+  await esphome.write(file, content, now);
+}
+
 async function restore(b) {
   const kind = String(b.kind || ''), id = String(b.id || ''), file = String(b.file || '');
   const bk = backups.read(kind, id, file);
   if (!bk || (!bk.config && kind !== 'dashboard')) return { ok: false, error: 'That backup is gone' };
+  if (kind === 'esphome') {
+    try {
+      await putEsphome(id, (bk.config || {}).content, 'before-restore');
+      backupsChanged();
+      logActivity({ t: Date.now(), tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
   if (kind === 'dashboard') {
     try {
       await restoreDashboard(id, bk);
@@ -691,6 +728,7 @@ function snapshot() {
     lastCallAt: state.lastCallAt || 0,
     pinRequired: pinSet(),
     review: cfg.review,
+    esphome: { enabled: !!cfg.esphome.enabled, url: cfg.esphome.url, status: esphome.status() },
     reviews: state.reviews.slice(0, 40),
     health,
     security: securitySnapshot(),
@@ -838,6 +876,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/ha') return postJson(req, res, setHa);
   if (req.method === 'POST' && url === '/api/ha-test') return postJson(req, res, () => checkHa().then((s) => ({ ok: s.ok, error: s.ok ? undefined : (s.error || 'Home Assistant is not set up yet') })), { needPin: false });
   if (req.method === 'POST' && url === '/api/access') return postJson(req, res, setAccess);
+  if (req.method === 'POST' && url === '/api/esphome') return postJson(req, res, setEsphome);
+  if (req.method === 'POST' && url === '/api/esphome-test') return postJson(req, res, () => esphome.check().then((s) => { broadcastSoon(); return { ok: s.ok, error: s.ok ? undefined : s.error, devices: s.devices }; }), { needPin: false });
   if (req.method === 'POST' && url === '/api/token') return postJson(req, res, (b) => (b.regenerate ? newToken() : { ok: true, token: mcpToken() }));
   if (req.method === 'POST' && url === '/api/settings') return postJson(req, res, changeSettings);
   if (req.method === 'POST' && url === '/api/restore') return postJson(req, res, (b) => (DEMO ? { ok: false, error: 'Demo mode has no backups' } : restore(b)));
@@ -980,6 +1020,9 @@ function start() {
   runHealth(); setInterval(runHealth, 60000).unref();
   setInterval(reviewTimer, Number(process.env.HOMECLAUDE_REVIEW_TICK_MS) || 15000).unref();
   setInterval(checkHa, 60000).unref();
+  // ESPHome: find the Device Builder once Home Assistant answers, then look again now and then (the page shows it)
+  const espCheck = () => { if (cfg.esphome.enabled && ha.configured()) esphome.check().then(broadcastSoon).catch(() => {}); };
+  setTimeout(espCheck, 8000).unref(); setInterval(espCheck, 10 * 60e3).unref();
   publicServer.on('error', (e) => console.error('Public port ' + PUBLIC_PORT + ': ' + e.message));
   publicServer.listen(PUBLIC_PORT, '0.0.0.0', () => console.log('Public port ' + PUBLIC_PORT + ': ' + (exposed() ? 'exposed mode, Claude sign-in and /mcp only' : 'local mode, serves nothing')));
   server.listen(PORT, '0.0.0.0', () => {
