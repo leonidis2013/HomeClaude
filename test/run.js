@@ -194,6 +194,28 @@ test('tools: save_automation backs up, refuses blocked actions', async () => {
   assert.ok(invalid.isError && /400/.test(invalid.text), 'Home Assistant validation errors come back to Claude');
 });
 
+test('tools: scenes list, read, save, refuse blocked, delete with backup', async () => {
+  const { t, ha, backups } = toolsWith({ edit: true });
+  const list = parse(await t.call('list_scenes', {}));
+  assert.ok(list.scenes.some((x) => x.entity_id === 'scene.evening' && x.editable && x.entities.includes('light.porch')));
+  const one = parse(await t.call('get_scene', { entity_id: 'scene.evening' }));
+  assert.strictEqual(one.config.entities['light.kitchen'].brightness, 120);
+  const made = parse(await t.call('save_scene', { config: { name: 'Bedroom Low', icon: 'mdi:weather-night', entities: { 'light.kitchen': { state: 'on', brightness: 46, hs_color: [22, 70] } } } }));
+  assert.ok(made.saved && made.created && made.entity_id === 'scene.bedroom_low' && !made.backup);
+  const changed = parse(await t.call('save_scene', { entity_id: 'scene.bedroom_low', config: { name: 'Bedroom Low', entities: { 'light.kitchen': { state: 'on', brightness: 60 } } } }));
+  assert.ok(!changed.created && changed.backup && changed.id === made.id);
+  assert.strictEqual(backups.read('scene', made.id, changed.backup).config.entities['light.kitchen'].brightness, 46);
+  const bad = await t.call('save_scene', { config: { name: 'Leave', entities: { 'lock.front_door': { state: 'unlocked' } } } });
+  assert.ok(bad.isError && /blocked/.test(bad.text));
+  assert.ok((await t.call('save_scene', { config: { name: 'Empty', entities: {} } })).isError);
+  assert.ok((await t.call('delete_scene', { entity_id: 'scene.bedroom_low' })).isError, 'delete needs its own switch');
+  const { t: t2, ha: ha2, backups: b2 } = toolsWith({ delete: true });
+  const del = parse(await t2.call('delete_scene', { entity_id: 'scene.evening' }));
+  assert.ok(del.deleted && del.backup && !ha2.world.w.scenes['1700000000101']);
+  assert.strictEqual(b2.list()[0].alias, 'Evening');
+  void ha;
+});
+
 test('tools: backups are pruned to the keep count', async () => {
   const { t, backups } = toolsWith({ edit: true });
   const cfg = parse(await t.call('get_automation', { id: '1700000000001' })).config;

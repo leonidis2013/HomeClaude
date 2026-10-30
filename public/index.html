@@ -507,7 +507,7 @@
       </div>
       <div class="card">
         <h2>Blocked</h2>
-        <div class="set first"><div class="sl"><b>Blocked domains</b><span>Claude can read these, but cannot call their services, aim services at their entities, or save automations, scripts or dashboard buttons whose actions do. Default: lock, alarm_control_panel, cover (garage doors)</span></div><div class="sc"><input id="pBlocked" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Blocked domains"><button id="pBlockedSave" class="on">Save</button></div></div>
+        <div class="set first"><div class="sl"><b>Blocked domains</b><span>Claude can read these, but cannot call their services, aim services at their entities, or save automations, scripts, scenes or dashboard buttons whose actions do. Default: lock, alarm_control_panel, cover (garage doors)</span></div><div class="sc"><input id="pBlocked" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Blocked domains"><button id="pBlockedSave" class="on">Save</button></div></div>
       </div>
       <div class="card">
         <h2>Tools Claude sees</h2>
@@ -705,9 +705,9 @@
   function chips(list) { return '<div class="chips">' + list.map(function (c) { return '<span class="chip ' + (c[1] || '') + '">' + esc(c[0]) + '</span>'; }).join('') + '</div>'; }
   var PERMS = [['edit', 'Edit'], ['services', 'Services'], ['delete', 'Delete'], ['restart', 'Restart']];
   var LVL = [['read', 'Look only', 'Read everything: states, history, logs, traces, integrations, automation and script configs. Change nothing.'],
-    ['build', 'Help build', 'Also create and change automations, scripts, dashboards and helpers, change Z-Wave device settings, and reload YAML. Every change waits for your Keep or Revert.'],
+    ['build', 'Help build', 'Also create and change automations, scripts, scenes, dashboards and helpers, change Z-Wave device settings, and reload YAML. Every change waits for your Keep or Revert.'],
     ['hands', 'Hands on', 'Also run services: turn things on and off, run scripts, send notifications. This acts on the real home.'],
-    ['full', 'Full', 'Also delete automations, scripts, dashboards and helpers, and restart Home Assistant (only after its config check passes). Only on your network, never from outside.']];
+    ['full', 'Full', 'Also delete automations, scripts, scenes, dashboards and helpers, and restart Home Assistant (only after its config check passes). Only on your network, never from outside.']];
   var LVL_NAME = { read: 'Look only', build: 'Help build', hands: 'Hands on', full: 'Full' };
   function modeText(a) { return a.enabled ? LVL_NAME[a.local] || 'Look only' : 'Off'; }
 
@@ -934,7 +934,7 @@
     $('#reviews').innerHTML = list.map(function (r) {
       var a = ACT[r.action] || [r.action, ''];
       var auto = r.autoAt ? '<span class="tm">' + (s.review.ifNoAnswer === 'revert' ? 'Reverts' : 'Kept') + ' automatically in <b data-until="' + Number(r.autoAt) + '">' + left(r.autoAt - Date.now()) + '</b></span>' : '<span class="tm">waiting for you</span>';
-      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : r.kind === 'zwave' ? 'changed Z-Wave settings: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'helper' ? 'a helper' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : r.kind === 'zwave' ? 'Z-Wave' : a[0]) + '</span>' + auto + '</div>' +
+      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : r.kind === 'zwave' ? 'changed Z-Wave settings: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'scene' ? 'a scene' : r.kind === 'helper' ? 'a helper' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : r.kind === 'zwave' ? 'Z-Wave' : a[0]) + '</span>' + auto + '</div>' +
         '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + (r.kind === 'organize' || r.kind === 'helper' ? '' : r.kind === 'zwave' ? ' · Revert sends the old values back (a sleeping device gets them when it next wakes up)' : ' · the old version is backed up') + '</div>' +
         (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(revLines(r, r.before), revLines(r, r.after)) + '</div>' : '') +
         '<div class="af"><button data-rvshow="' + r.rid + '">' + (rvOpen[r.rid] ? 'Hide changes' : 'Show changes') + '</button><span class="sp"></span>' +
@@ -1204,7 +1204,7 @@
   $('#lvlTable').innerHTML = LVL.map(function (l) { return '<div class="tl"><b style="min-width:92px;font-family:inherit">' + esc(l[1]) + '</b><span>' + esc(l[2]) + '</span></div>'; }).join('') +
     '<div class="note" style="margin-top:8px">Each level includes the ones above it. Blocked domains (below) stay blocked at every level.</div>';
   var LVL_WARN = { hands: 'Claude will be able to run services that act on the real home: lights, switches, scripts, notifications. Blocked domains stay blocked.',
-    full: 'Claude will also be able to delete automations, scripts, dashboards (backed up first) and helpers and restart Home Assistant (after a passing config check).' };
+    full: 'Claude will also be able to delete automations, scripts, scenes, dashboards (backed up first) and helpers and restart Home Assistant (after a passing config check).' };
   function lvlSeg(attr, id, cur, max) {
     return '<div class="seg" ' + attr + '="' + esc(id) + '">' + LVL.filter(function (l) { return LEVELS_UP_TO(max).indexOf(l[0]) >= 0; }).map(function (l) {
       return '<button data-v="' + l[0] + '"' + (cur === l[0] ? ' class="on"' : '') + '>' + l[1] + '</button>'; }).join('') + '</div>';
@@ -1470,7 +1470,7 @@
       var a = s.access, cur = wzPick || ({ read: 'look', build: 'build', hands: 'hands', full: 'hands' })[a.local] || 'look';
       var P = [
         ['look', 'Look only', 'Claude can read everything (states, history, logs, traces, automations) and change nothing. Good to start with.', true],
-        ['build', 'Help build', 'Also create and change automations, scripts, dashboards and helpers, change Z-Wave device settings, and reload YAML. Each change waits for your Keep or Revert.'],
+        ['build', 'Help build', 'Also create and change automations, scripts, scenes, dashboards and helpers, change Z-Wave device settings, and reload YAML. Each change waits for your Keep or Revert.'],
         ['hands', 'Hands on', 'Also run services: turn things on and off, run scripts, send notifications. This acts on the real home.']
       ];
       pane.innerHTML = head('What may Claude change?') +
