@@ -213,6 +213,43 @@ test('tools: scenes list, read, save, refuse blocked, delete with backup', async
   const del = parse(await t2.call('delete_scene', { entity_id: 'scene.evening' }));
   assert.ok(del.deleted && del.backup && !ha2.world.w.scenes['1700000000101']);
   assert.strictEqual(b2.list()[0].alias, 'Evening');
+});
+
+test('tools: rooms, categories and labels set while saving, and set_area', async () => {
+  const { t, ha } = toolsWith({ edit: true });
+  const W = ha.world.w;
+  const reviews = [];
+  t.ctx.onChange = (c) => { reviews.push(c); return 'reviewed'; };
+  const before = W.scenes ? Object.keys(W.scenes).length : 0;
+  const bad = await t.call('save_scene', { area: 'Attic', config: { name: 'Nope', entities: { 'light.kitchen': 'on' } } });
+  assert.ok(bad.isError && /no area "Attic"/.test(bad.text), 'unknown area refused');
+  assert.strictEqual(Object.keys(W.scenes).length, before, 'nothing saved when the area is unknown');
+  const made = parse(await t.call('save_scene', { area: 'Kitchen', category: 'Bedtime', labels: ['Lights', 'Nightstand'], config: { name: 'Kitchen Low', icon: 'mdi:weather-night', entities: { 'light.kitchen': { state: 'on', brightness: 46 } } } }));
+  assert.ok(made.saved && made.entity_id === 'scene.kitchen_low');
+  assert.strictEqual(made.organized.area, 'Kitchen');
+  assert.strictEqual(made.organized.category, 'Bedtime');
+  assert.ok(made.organized.made.includes('category Bedtime') && made.organized.made.includes('label Nightstand'), JSON.stringify(made.organized));
+  const e = W.reg.find((x) => x.entity_id === 'scene.kitchen_low');
+  assert.strictEqual(e.area_id, 'kitchen');
+  assert.ok(e.categories.scene && e.labels.length === 2);
+  const listed = parse(await t.call('list_scenes', { query: 'kitchen low' })).scenes[0];
+  assert.deepStrictEqual([listed.area, listed.category, listed.labels.length], ['Kitchen', 'Bedtime', 2], 'lists show room, category and labels');
+  assert.strictEqual(parse(await t.call('get_scene', { entity_id: 'scene.kitchen_low' })).area, 'Kitchen');
+  const org = reviews.find((r) => r.kind === 'organize');
+  assert.ok(org && org.revert.some((m) => m.type === 'config/entity_registry/update' && m.area_id === null) && org.revert.some((m) => m.type === 'config/category_registry/delete'), 'revertable');
+  const again = parse(await t.call('save_scene', { entity_id: 'scene.kitchen_low', area: 'kitchen', category: 'bedtime', labels: ['lights'], config: { name: 'Kitchen Low', entities: { 'light.kitchen': 'on' } } }));
+  assert.ok(again.organized.unchanged, 'same filing twice changes nothing');
+  const sc = parse(await t.call('save_script', { id: 'garage_check', area: 'Garage', config: { alias: 'Garage check', sequence: [] } }));
+  assert.strictEqual(sc.organized.area, 'Garage');
+  assert.strictEqual(W.reg.find((x) => x.entity_id === 'script.garage_check').area_id, 'garage');
+  const moved = parse(await t.call('set_area', { entity_ids: ['scene.kitchen_low'], device_ids: ['d1'], area: 'front porch' }));
+  assert.strictEqual(moved.changed, 2);
+  assert.strictEqual(W.devices.find((d) => d.id === 'd1').area_id, 'front_porch');
+  assert.strictEqual(parse(await t.call('set_area', { entity_ids: ['scene.kitchen_low'], area: 'Front Porch' })).changed, 0);
+  assert.strictEqual(parse(await t.call('set_area', { entity_ids: ['scene.kitchen_low'], area: null })).area, null);
+  assert.strictEqual(W.reg.find((x) => x.entity_id === 'scene.kitchen_low').area_id, null);
+  assert.ok((await t.call('set_area', { entity_ids: ['light.nope'], area: 'Kitchen' })).isError);
+  assert.ok(!toolsWith({}).t.list().some((x) => x.name === 'set_area'), 'set_area needs edit');
   void ha;
 });
 
