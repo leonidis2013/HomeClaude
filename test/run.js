@@ -1264,6 +1264,198 @@ test('server: ESPHome changes are reviewed, reverted and restored', async () => 
   } finally { proc.kill(); await f.close(); }
 });
 
+// ---------- sites: one HomeClaude, several Home Assistants ----------
+const Freeze = R('lib/freeze');
+test('freeze: service-time windows, past midnight and back to back', () => {
+  const tz = 'America/Chicago';
+  const f = { enabled: true, tz, windows: [{ days: [0], from: '07:00', to: '13:00', label: 'Sunday service' }, { days: [0], from: '13:00', to: '14:00' }, { days: [3], from: '22:00', to: '02:00' }] };
+  const sun930 = Date.parse('2026-11-01T15:30:00Z'); // Sunday 09:30 in Chicago
+  const a = Freeze.active(f, sun930);
+  assert.ok(a && a.label === 'Sunday service');
+  assert.strictEqual(new Date(a.until).toISOString(), '2026-11-01T20:00:00.000Z', 'runs on through the window that starts as it ends (14:00)');
+  assert.strictEqual(Freeze.active(f, Date.parse('2026-11-01T21:00:00Z')), null, '15:00 is free');
+  assert.strictEqual(new Date(Freeze.active(f, Date.parse('2026-11-05T07:30:00Z')).until).toISOString(), '2026-11-05T08:00:00.000Z', 'Wednesday night window still on at 01:30 Thursday');
+  assert.strictEqual(Freeze.active(Object.assign({}, f, { enabled: false }), sun930), null, 'off means off');
+  assert.ok(Freeze.clean({ enabled: true, tz: 'Mars/Base', windows: [] }).error);
+  assert.ok(Freeze.clean({ enabled: true, windows: [] }).error, 'on with no times');
+  assert.ok(Freeze.clean({ windows: [{ days: [], from: '07:00', to: '08:00' }] }).error, 'needs a day');
+  assert.deepStrictEqual(Freeze.clean({ enabled: true, windows: [{ days: [3, '0', 9], from: '7:00', to: '13:00' }] }).freeze.windows[0], { days: [0, 3], from: '07:00', to: '13:00', label: '' });
+});
+
+/** Starts HomeClaude on free ports with the given saved config. */
+async function startServer(name, saved, extraEnv) {
+  const port = await freePort(), pub = await freePort(), dir = tmp(name);
+  if (saved) fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(saved));
+  const env = Object.assign({}, process.env, { PORT: String(port), PUBLIC_PORT: String(pub), CONFIG: path.join(dir, 'config.json'), HOMECLAUDE_NO_UPDATE_CHECK: '1' }, extraEnv || {});
+  const proc = spawn(process.execPath, [path.join(root, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  for (let i = 0; i < 50 && !/HomeClaude v/.test(log); i++) await new Promise((r) => setTimeout(r, 100));
+  return { port, pub, dir, proc, log: () => log };
+}
+
+test('server: a second site has its own endpoint, settings, reviews and backups', async () => {
+  const home = await fakeHa(), church = await fakeHa({ token: 'church-token' });
+  church.world.w.automations['1700000000001'].alias = 'Sanctuary lights';
+  const S = await startServer('sites');
+  const { port } = S;
+  try {
+    await req(port, 'POST', '/api/ha', { url: home.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { local: 'build' });
+    // adding: short name rules
+    assert.ok(!(await req(port, 'POST', '/api/sites', { action: 'add', id: 'home' })).j.ok, 'reserved');
+    assert.ok(!(await req(port, 'POST', '/api/sites', { action: 'add', id: 'Bad Name' })).j.ok);
+    const add = await req(port, 'POST', '/api/sites', { action: 'add', id: 'rhcc', name: 'RHCC' });
+    assert.ok(add.j.ok && add.j.id === 'rhcc', JSON.stringify(add.j));
+    assert.ok(!(await req(port, 'POST', '/api/sites', { action: 'add', id: 'rhcc' })).j.ok, 'only once');
+    assert.strictEqual((await req(port, 'POST', '/api/ha', { site: 'nope', url: church.url })).status, 404);
+    assert.ok((await req(port, 'POST', '/api/ha', { site: 'rhcc', url: church.url, token: 'church-token' })).j.ok);
+    await req(port, 'POST', '/api/ha-test', { site: 'rhcc' });
+    let st = (await req(port, 'GET', '/api/state')).j;
+    const rs = st.sites.find((x) => x.id === 'rhcc');
+    assert.ok(st.sites.length === 2 && st.sites[0].id === 'home' && st.sites[0].primary);
+    assert.ok(rs.ha.status.ok && rs.path === '/site/rhcc/mcp', JSON.stringify(rs.ha.status));
+    assert.ok(rs.access.local === 'read' && rs.access.outsideMax === 'read', 'a new site starts read-only, also from outside');
+    assert.ok(!fs.readFileSync(path.join(S.dir, 'config.json'), 'utf8').includes('church-token'), 'its token is stored encrypted');
+
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const rpc = async (p, method, params) => (await req(port, 'POST', p, { jsonrpc: '2.0', id: 1, method, params }, auth));
+    const call = async (p, name, args) => (await rpc(p, 'tools/call', { name, arguments: args })).j.result;
+    // (a permission change is announced once at the top of the next answer: not part of the JSON)
+    const callJ = async (p, name, args) => JSON.parse((await call(p, name, args)).content[0].text.replace(/^\[HomeClaude:[^\]]*\]\s*/, ''));
+    // each endpoint introduces itself and knows about the other
+    const init = (await rpc('/site/rhcc/mcp', 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } })).j.result;
+    assert.strictEqual(init.serverInfo.title, 'HomeClaude (RHCC)');
+    assert.ok(/RHCC Home Assistant only/.test(init.instructions) && /Home/.test(init.instructions));
+    assert.strictEqual((await rpc('/mcp', 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } })).j.result.serverInfo.title, 'HomeClaude (Home)');
+    assert.strictEqual((await rpc('/site/nope/mcp', 'tools/list', {})).status, 404);
+    assert.strictEqual((await req(port, 'POST', '/site/rhcc/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 401, 'still needs the token');
+    assert.ok((await req(port, 'POST', '/site/rhcc/mcp/' + tok, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).j.result, 'token in the address works per site too');
+    // each reaches its own Home Assistant, with its own level
+    assert.strictEqual((await callJ('/site/rhcc/mcp', 'get_automation', { id: '1700000000001' })).config.alias, 'Sanctuary lights');
+    assert.notStrictEqual((await callJ('/mcp', 'get_automation', { id: '1700000000001' })).config.alias, 'Sanctuary lights');
+    const ov = await callJ('/site/rhcc/mcp', 'get_overview', {});
+    assert.ok(ov.homeclaude.site === 'RHCC' && ov.homeclaude.other_sites[0] === 'Home' && !ov.homeclaude.can_edit_automations_scripts_and_dashboards);
+    const names = (await rpc('/site/rhcc/mcp', 'tools/list', {})).j.result.tools.map((t) => t.name);
+    assert.ok(!names.includes('save_automation') && (await rpc('/mcp', 'tools/list', {})).j.result.tools.some((t) => t.name === 'save_automation'));
+    // changes on the church site: its own review, revert goes to the church Home Assistant
+    assert.ok((await req(port, 'POST', '/api/access', { site: 'rhcc', local: 'build' })).j.ok);
+    const c = (await callJ('/site/rhcc/mcp', 'get_automation', { id: '1700000000001' })).config;
+    c.alias = 'Sanctuary lights v2';
+    await callJ('/site/rhcc/mcp', 'save_automation', { id: '1700000000001', config: c });
+    assert.strictEqual(church.world.w.automations['1700000000001'].alias, 'Sanctuary lights v2');
+    assert.notStrictEqual(home.world.w.automations['1700000000001'].alias, 'Sanctuary lights v2', 'home untouched');
+    st = (await req(port, 'GET', '/api/state')).j;
+    const rv = st.reviews.find((x) => x.status === 'waiting');
+    assert.ok(rv.site === 'rhcc' && st.sites.find((x) => x.id === 'rhcc').waiting === 1);
+    assert.ok(st.activity[0].site === 'rhcc');
+    assert.strictEqual((await callJ('/mcp', 'get_overview', {})).homeclaude.change_reviews.waiting.length, 0, 'home does not see church reviews');
+    assert.ok((await req(port, 'POST', '/api/review', { rid: rv.rid, keep: false })).j.ok);
+    assert.strictEqual(church.world.w.automations['1700000000001'].alias, 'Sanctuary lights');
+    // backups live per site
+    const bk = (await req(port, 'GET', '/api/backups?site=rhcc')).j.backups;
+    assert.ok(bk.length >= 1 && bk.every((b) => b.kind === 'automation'));
+    assert.ok(fs.existsSync(path.join(S.dir, 'sites', 'rhcc', 'backups')));
+    assert.ok(!(await req(port, 'GET', '/api/backups')).j.backups.some((b) => b.reason === 'before-revert'), 'not in home\'s backups');
+    // renaming shows up at once
+    assert.ok((await req(port, 'POST', '/api/sites', { action: 'update', site: 'rhcc', name: 'Church', color: '#f2994a' })).j.ok);
+    assert.strictEqual((await rpc('/site/rhcc/mcp', 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } })).j.result.serverInfo.title, 'HomeClaude (Church)');
+    // switched off for one site only
+    await req(port, 'POST', '/api/access', { site: 'rhcc', enabled: false });
+    assert.strictEqual((await rpc('/site/rhcc/mcp', 'tools/list', {})).status, 503);
+    assert.ok((await rpc('/mcp', 'tools/list', {})).j.result);
+    await req(port, 'POST', '/api/access', { site: 'rhcc', enabled: true });
+    // removing
+    assert.ok(!(await req(port, 'POST', '/api/sites', { action: 'remove', site: 'home' })).j.ok);
+    assert.ok((await req(port, 'POST', '/api/sites', { action: 'remove', site: 'rhcc' })).j.ok);
+    assert.strictEqual((await rpc('/site/rhcc/mcp', 'tools/list', {})).status, 404);
+    st = (await req(port, 'GET', '/api/state')).j;
+    assert.strictEqual(st.sites.length, 1);
+    assert.strictEqual((await rpc('/mcp', 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } })).j.result.serverInfo.title, 'HomeClaude (Home Assistant)', 'one site again: as before');
+  } finally { S.proc.kill(); await home.close(); await church.close(); }
+});
+
+test('server: service-time freeze lets Claude look but not change', async () => {
+  const home = await fakeHa(), church = await fakeHa();
+  const S = await startServer('freeze');
+  const { port } = S;
+  try {
+    await req(port, 'POST', '/api/ha', { url: home.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { local: 'build' });
+    await req(port, 'POST', '/api/sites', { action: 'add', id: 'rhcc', name: 'RHCC' });
+    await req(port, 'POST', '/api/ha', { site: 'rhcc', url: church.url, token: 'good-token' });
+    await req(port, 'POST', '/api/access', { site: 'rhcc', local: 'build' });
+    assert.ok(!(await req(port, 'POST', '/api/sites', { action: 'update', site: 'rhcc', freeze: { enabled: true, windows: [] } })).j.ok, 'needs a time');
+    // a freeze that is on all week (two windows back to back)
+    const all = [0, 1, 2, 3, 4, 5, 6];
+    const fr = await req(port, 'POST', '/api/sites', { action: 'update', site: 'rhcc', freeze: { enabled: true, tz: 'America/Chicago', windows: [{ days: all, from: '00:00', to: '12:00', label: 'Service' }, { days: all, from: '12:00', to: '00:00', label: 'Service' }] } });
+    assert.ok(fr.j.ok, JSON.stringify(fr.j));
+    const tok = (await req(port, 'POST', '/api/token', {})).j.token, auth = { authorization: 'Bearer ' + tok };
+    const call = async (p, name, args) => (await req(port, 'POST', p, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, auth)).j.result;
+    const names = (await req(port, 'POST', '/site/rhcc/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, auth)).j.result.tools.map((t) => t.name);
+    assert.ok(names.includes('save_automation'), 'tools stay listed during a freeze (no reconnecting)');
+    const cfgNow = JSON.parse((await call('/site/rhcc/mcp', 'get_automation', { id: '1700000000001' })).content[0].text).config;
+    const r = await call('/site/rhcc/mcp', 'save_automation', { id: '1700000000001', config: Object.assign(cfgNow, { alias: 'during service' }) });
+    assert.ok(r.isError && /paused/.test(r.content[0].text) && /Service/.test(r.content[0].text), r.content[0].text);
+    assert.notStrictEqual(church.world.w.automations['1700000000001'].alias, 'during service');
+    const ov = JSON.parse((await call('/site/rhcc/mcp', 'get_overview', {})).content[0].text);
+    assert.ok(/paused/.test(ov.homeclaude.changes_paused));
+    // home has no freeze: it still works
+    const h = JSON.parse((await call('/mcp', 'get_automation', { id: '1700000000001' })).content[0].text).config;
+    assert.ok(!(await call('/mcp', 'save_automation', { id: '1700000000001', config: Object.assign(h, { alias: 'home ok' }) })).isError);
+    const st = (await req(port, 'GET', '/api/state')).j.sites.find((x) => x.id === 'rhcc');
+    assert.ok(st.frozen && st.frozen.until > Date.now() && /Service/.test(st.freeze.text));
+    // switched off: changes allowed again
+    assert.ok((await req(port, 'POST', '/api/sites', { action: 'update', site: 'rhcc', freeze: { enabled: false } })).j.ok);
+    assert.ok(!(await call('/site/rhcc/mcp', 'save_automation', { id: '1700000000001', config: Object.assign(cfgNow, { alias: 'after service' }) })).isError);
+    assert.strictEqual(church.world.w.automations['1700000000001'].alias, 'after service');
+  } finally { S.proc.kill(); await home.close(); await church.close(); }
+});
+
+test('server: a connection from outside works only on the site it was approved for', async () => {
+  const salt = crypto.randomBytes(16);
+  const S = await startServer('sitesout', { controlPinHash: 'scrypt:' + salt.toString('hex') + ':' + crypto.scryptSync('2468', salt, 32).toString('hex'), publicUrl: 'https://hc.example.com', security: { mode: 'exposed' }, setup: { completed: true, marks: {} } });
+  const { port, pub } = S;
+  const H = (extra) => Object.assign({ 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.40', 'x-forwarded-host': 'hc.example.com' }, extra || {});
+  const PIN = { 'x-pin': '2468' };
+  try {
+    for (let i = 0; i < 50 && !/Public port/.test(S.log()); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok((await req(port, 'POST', '/api/sites', { action: 'add', id: 'rhcc', name: 'RHCC' }, PIN)).j.ok);
+    // discovery per site
+    const prm = await req(pub, 'GET', '/.well-known/oauth-protected-resource/site/rhcc/mcp', undefined, H());
+    assert.ok(prm.j.resource === 'https://hc.example.com/site/rhcc/mcp' && /RHCC/.test(prm.j.resource_name));
+    assert.strictEqual((await req(pub, 'GET', '/.well-known/oauth-protected-resource/site/nope/mcp', undefined, H())).status, 404);
+    const r401 = await fetch('http://127.0.0.1:' + pub + '/site/rhcc/mcp', { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: '{}' });
+    assert.ok(r401.status === 401 && /oauth-protected-resource\/site\/rhcc\/mcp"/.test(r401.headers.get('www-authenticate')));
+    // sign in for the church site
+    const reg = (await req(pub, 'POST', '/oauth/register', { client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }, H())).j;
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const q = (resource) => new URLSearchParams({ response_type: 'code', client_id: reg.client_id, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', code_challenge: b64sha(verifier), code_challenge_method: 'S256', state: 's', resource });
+    const bad = await fetch('http://127.0.0.1:' + pub + '/oauth/authorize?' + q('https://hc.example.com/site/nope/mcp'), { headers: H(), redirect: 'manual' });
+    assert.ok(bad.status === 302 && /error=invalid_target/.test(bad.headers.get('location')), 'unknown site refused');
+    const page = (await req(pub, 'GET', '/oauth/authorize?' + q('https://hc.example.com/site/rhcc/mcp'), undefined, H())).text;
+    assert.ok(/for <b>RHCC<\/b>/.test(page), 'the sign-in page names the site');
+    const d = JSON.parse(/<script type="application\/json" id="d">(.*?)<\/script>/.exec(page)[1]);
+    const pend = (await req(port, 'GET', '/api/state')).j.security.pending[0];
+    assert.strictEqual(pend.site, 'rhcc', 'the approval says which site');
+    assert.ok((await req(port, 'POST', '/api/connections/decide', { id: pend.id, approve: true, scope: 'hands' }, PIN)).j.ok);
+    const code = new URL((await req(pub, 'GET', '/oauth/status?id=' + d.id + '&s=' + d.s, undefined, H())).j.redirect).searchParams.get('code');
+    const t = (await req(pub, 'POST', '/oauth/token', { grant_type: 'authorization_code', client_id: reg.client_id, code, code_verifier: verifier, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', resource: 'https://hc.example.com/site/rhcc/mcp' }, H())).j;
+    assert.ok(t.access_token, JSON.stringify(t));
+    const A = H({ authorization: 'Bearer ' + t.access_token });
+    const list = await req(pub, 'POST', '/site/rhcc/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, A);
+    assert.ok(list.j.result, JSON.stringify(list.j));
+    assert.ok(!list.j.result.tools.some((x) => x.name === 'call_service'), 'Hands on is capped by the site\'s outside limit (Look only)');
+    // the same token on home's endpoint: refused, and not counted as an attack
+    for (let i = 0; i < 12; i++) assert.strictEqual((await req(pub, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, A)).status, 401);
+    assert.strictEqual((await req(pub, 'GET', '/.well-known/oauth-protected-resource', undefined, H())).status, 200, 'no lockout');
+    const conn = (await req(port, 'GET', '/api/state')).j.security.connections[0];
+    assert.ok(conn.site === 'rhcc' && conn.effective === 'read');
+    // removing the site ends its connections
+    assert.ok((await req(port, 'POST', '/api/sites', { action: 'remove', site: 'rhcc' }, PIN)).j.revoked === 1);
+    assert.strictEqual((await req(pub, 'POST', '/site/rhcc/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, A)).status, 404);
+  } finally { S.proc.kill(); }
+});
+
 // ---------- run ----------
 module.exports = { fakeHa };
 if (require.main === module) process.on('beforeExit', () => { if (!process.exitCode) { console.log('A test stopped without finishing (nothing left to wait for)'); process.exit(1); } });

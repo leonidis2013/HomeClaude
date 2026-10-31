@@ -341,6 +341,27 @@
     .wzf { position:sticky; bottom:0; background:var(--card); padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
   }
   .rv code, .note code, ol.steps code { font:12px var(--mono); background:var(--card2); padding:1px 5px; border-radius:5px; color:var(--fg); }
+  /* ===== sites: each Home Assistant has its own accent color ===== */
+  .sw { display:inline-block; width:10px; height:10px; border-radius:3px; background:var(--sc, var(--acc)); flex:none; }
+  .sw.lg { width:12px; height:12px; }
+  .dev.site { box-shadow:inset 0 3px 0 var(--sc, var(--acc)); }
+  .chip.sitec { background:color-mix(in srgb, var(--sc) 18%, transparent); color:var(--sc); }
+  .an .chip { display:inline-block; font:700 10px/1.5 system-ui, -apple-system, sans-serif; letter-spacing:.06em; white-space:nowrap; overflow:visible; vertical-align:1px; margin-left:4px; }
+  :root[data-theme=light] .chip.sitec { color:color-mix(in srgb, var(--sc) 70%, #000); }
+  .card.sitecard { border-top:3px solid var(--sc, var(--acc)); }
+  .card.sitecard h2::before { background:var(--sc, var(--acc)); }
+  .swatches { display:flex; gap:6px; flex-wrap:wrap; }
+  .swatches button { width:26px; height:26px; padding:0; border-radius:7px; background:var(--sc); border:2px solid transparent; }
+  .swatches button.on { border-color:var(--fg); box-shadow:0 0 0 2px var(--card) inset; }
+  .fwin { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:9px 0; border-top:1px solid var(--line); }
+  .fwin .days { display:inline-flex; gap:3px; }
+  .fwin .days button { width:30px; padding:5px 0; font-size:12px; }
+  .fwin input[type=time] { width:108px; }
+  .fwin input.lbl { width:150px; }
+  .fwin .x { margin-left:auto; }
+  .connbox { margin-top:4px; }
+  .connbox .sub2 { margin-top:10px; }
+  @media (max-width:720px) { .fwin input.lbl { width:100%; } .fwin .x { margin-left:0; } }
 </style>
 </head>
 <body>
@@ -365,8 +386,9 @@
       <div class="dh"><span class="dot" id="haDot"></span><div class="dn">Home Assistant</div></div>
       <div class="dsub" id="haSub"></div>
       <div class="rows" id="haRows"></div>
-      <div class="df"><span class="when" id="haWhen"></span><button id="haOpen" class="hide">Open</button><button id="haTest">Test now</button></div>
+      <div class="df"><span class="when" id="haWhen"></span><button id="haOpen" class="hide">Open</button><button id="sitesBtn" title="Your Home Assistants (sites)">Sites</button><button id="haTest">Test now</button></div>
     </div>
+    <div id="siteCards" style="display:contents"></div>
     <div class="dev none" id="accCard">
       <div class="dh"><span class="dot" id="accDot"></span><div class="dn">Claude access</div><div class="seg" id="accSeg"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
       <div class="dsub" id="accSub"></div>
@@ -390,6 +412,13 @@
  <div class="setup">
   <div class="side wside" id="wzSide"></div>
   <div class="pane"><div class="card wz" id="wzPane"></div></div>
+ </div>
+</section>
+
+<section id="tab-addsite" class="hide">
+ <div class="setup">
+  <div class="side wside" id="asSide"></div>
+  <div class="pane"><div class="card wz" id="asPane"></div></div>
  </div>
 </section>
 
@@ -434,6 +463,7 @@
  <div class="setup">
   <div class="side" id="sub">
     <button data-sub="ha" class="on"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6"/></svg><span>Home Assistant</span></button>
+    <button data-sub="sites"><svg viewBox="0 0 24 24"><path d="M2 20h20M4 20V10l5-4 5 4v10M14 20v-7l4-3 4 3v7M8 20v-4h2v4"/></svg><span>Sites</span></button>
     <button data-sub="claude"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Connect Claude</span></button>
     <button data-sub="perm"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span>Permissions</span></button>
     <button data-sub="backups"><svg viewBox="0 0 24 24"><path d="M21 8v12H3V8M1 3h22v5H1zM10 12h4"/></svg><span>Backups</span></button>
@@ -466,6 +496,12 @@
         </ol>
         <div class="note" style="margin-top:8px">A separate user means everything Claude does shows up in Home Assistant's logbook under that name, and you can revoke it there at any time.</div>
       </div>
+    </div>
+
+    <div data-pane="sites" class="hide">
+      <div class="note pnote">One HomeClaude can look after several Home Assistants, for example your home and a church or office. Each site has its own address and token, its own permissions, its own backups and its own Claude connector, so Claude only ever reaches the site whose connector it is using.</div>
+      <div id="sitesList"></div>
+      <div class="card"><div class="set first"><div class="sl"><b>Add a site</b><span id="sitesAddNote">A guided setup: name it, connect its Home Assistant, choose what Claude may do there and when changes are paused</span></div><div class="sc"><button id="sitesAdd" class="on">Add a site</button></div></div></div>
     </div>
 
     <div data-pane="claude" class="hide">
@@ -517,7 +553,7 @@
 
     <div data-pane="backups" class="hide">
       <div class="note pnote">Before Claude changes or deletes an automation, script or dashboard, HomeClaude saves the old version here. Restore puts it back in Home Assistant (and saves the current one first).</div>
-      <div class="card"><h2>Backups</h2><div id="bkList"><div class="note">Loading…</div></div></div>
+      <div class="card"><h2>Backups</h2><div id="bkSites" style="margin-bottom:8px"></div><div id="bkList"><div class="note">Loading…</div></div></div>
     </div>
 
     <div data-pane="activity" class="hide">
@@ -577,7 +613,7 @@
   function when(t) { var d = new Date(t); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
 
   // ---------- saved on this device ----------
-  var SUBS = ['ha', 'claude', 'perm', 'backups', 'activity', 'settings'];
+  var SUBS = ['ha', 'sites', 'claude', 'perm', 'backups', 'activity', 'settings'];
   var themePref = 'auto', subPane = 'ha';
   try { themePref = localStorage.getItem('hc-theme') || 'auto'; } catch (e) {}
   try { subPane = localStorage.getItem('hc-sub') || 'ha'; } catch (e) {}
@@ -585,7 +621,7 @@
   if (SUBS.indexOf(subPane) < 0) subPane = 'ha';
 
   // ---------- state ----------
-  var snap = null, lastMsg = 0, pin = '', inSetup = false, inWizard = false, inSecurity = false, token = '';
+  var snap = null, lastMsg = 0, pin = '', inSetup = false, inWizard = false, inSecurity = false, inAddSite = false, token = '', bkSite = 'home';
   try { pin = sessionStorage.getItem('hc-pin') || ''; } catch (e) {}
   var haLoaded = false, espLoaded = false, pubLoaded = false, blkLoaded = false, keepLoaded = false, bkSig = null, apSig = '', apScope = {}, connSig = '';
 
@@ -646,20 +682,32 @@
 
   // ---------- connection details ----------
   function mcpBase() { return location.protocol + '//' + location.host; }
-  function codeCmd(t) { return 'claude mcp add --transport http homeclaude ' + mcpBase() + '/mcp --header "Authorization: Bearer ' + t + '"'; }
-  function connUrl() { return snap && snap.publicUrl ? snap.publicUrl + '/mcp' : ''; }
+  // ---------- sites ----------
+  function sitesOf(s) { return (s && s.sites) || []; }
+  function multi(s) { return sitesOf(s).length > 1; }
+  function siteById(s, id) { return sitesOf(s).filter(function (x) { return x.id === (id || 'home'); })[0] || null; }
+  function sitePathOf(id) { return !id || id === 'home' ? '/mcp' : '/site/' + id + '/mcp'; }
+  /** Colored name tag, only when there is more than one site */
+  function siteChip(s, id) {
+    if (!multi(s)) return '';
+    var x = siteById(s, id);
+    return x ? '<span class="chip sitec" style="--sc:' + esc(x.color) + '">' + esc(x.name) + '</span>' : '<span class="chip">' + esc(id) + ' (removed)</span>';
+  }
+  function connName(id) { var x = siteById(snap, id); return !id || id === 'home' ? 'HomeClaude' : 'HomeClaude ' + (x ? x.name : id); }
+  function codeCmd(t, id) { return 'claude mcp add --transport http ' + (!id || id === 'home' ? 'homeclaude' : 'homeclaude-' + id) + ' ' + mcpBase() + sitePathOf(id) + ' --header "Authorization: Bearer ' + t + '"'; }
+  function connUrl(id) { return snap && snap.publicUrl ? snap.publicUrl + sitePathOf(id) : ''; }
   function hdr(t) { return 'Authorization: Bearer ' + t; }
   /** How to add HomeClaude to claude.ai and the phone app; depends on the mode. */
-  function webSteps(s, pre) {
-    var sec = s.security || {}, u = connUrl();
+  function webSteps(s, pre, id) {
+    var sec = s.security || {}, u = connUrl(id);
     if (sec.mode !== 'exposed' || !u) {
       return '<p class="note" style="margin:0 0 8px">claude.ai, Claude Desktop and the phone app connect from Anthropic\'s servers, not from your device, so HomeClaude has to be reachable from the internet. That is <b>exposed mode</b>: a reverse proxy (such as a Cloudflare Tunnel) in front of HomeClaude\'s public port, with Claude signing in and you approving each connection here.</p>' +
         '<button class="on" data-gosec>Set up exposed mode</button>';
     }
-    return '<ol class="steps"><li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>. Name it <b>HomeClaude</b>.</li><li>Paste this URL:</li></ol>' +
+    return '<ol class="steps"><li>On claude.ai, open <b>Customize &gt; Connectors</b>, choose <b>+ Add</b>, then <b>Add custom connector</b>. Name it <b>' + esc(connName(id)) + '</b>.</li><li>Paste this URL:</li></ol>' +
       '<div class="copyrow"><pre class="cmd" id="' + pre + 'Url">' + esc(u) + '</pre><button data-copy="' + pre + 'Url">Copy</button></div>' +
       '<ol class="steps" start="3"><li>Leave Authentication on its default sign-in, and choose <b>Add</b>, then <b>Connect</b>.</li>' +
-      '<li>A HomeClaude page opens with a code like <b>K7Q-2XM</b>. An approval with the same code appears at the top of this page. Check the codes match, choose what Claude may do, and approve.' +
+      '<li>A HomeClaude page opens with a code like <b>K7Q-2XM</b>. An approval with the same code' + (id && id !== 'home' ? ', marked for this site,' : '') + ' appears at the top of this page. Check the codes match, choose what Claude may do, and approve.' +
         (sec.totp && sec.totp.enabled && !sec.totp.off ? ' Away from home, type your authenticator code on that page instead.' : '') + '</li>' +
       '<li>The connector then works in Claude Desktop and the phone app too.</li></ol>' +
       (sec.allowTokenRemote ? '<div class="note" style="margin-top:8px">Access token from outside is on, so an app can also use <b>No sign in</b> with the request header <code>Authorization: Bearer &lt;token&gt;</code>.</div>' : '');
@@ -686,14 +734,20 @@
   function selectText(el) { var r = document.createRange(); r.selectNodeContents(el); var s = getSelection(); s.removeAllRanges(); s.addRange(r); }
   document.addEventListener('click', function (e) { var b = e.target.closest('[data-copy]'); if (b) copyFrom(b.dataset.copy, b.closest('.modal') || document); });
 
-  function openConnect() {
+  function connectHtml(t, id) {
+    var x = siteById(snap, id), name = x ? x.name : 'Home Assistant';
+    return '<div class="connbox">' + (multi(snap) ? '<div class="note">Each site has its own connector, so Claude can only reach <b>' + esc(name) + '</b> through this one.</div>' : '') +
+      '<div class="sub2">Claude Code on a computer on this network</div><div class="note">Run once in Terminal:</div>' +
+      '<div class="copyrow"><pre class="cmd" id="cmdCode' + esc(id || '') + '">' + esc(codeCmd(t, id)) + '</pre><button data-copy="cmdCode' + esc(id || '') + '">Copy</button></div>' +
+      '<div class="sub2">claude.ai, Claude Desktop and the phone app</div>' + webSteps(snap, 'm' + (id || ''), id) +
+      '<div class="sub2">Try it</div><div class="note">Ask Claude: <b>"Use ' + esc(connName(id)) + ' to give me an overview of ' + (multi(snap) ? esc(name) + '\'s' : 'my') + ' Home Assistant."</b></div></div>';
+  }
+  function openConnect(id) {
+    if (typeof id !== 'string') id = 'home';
     getToken().then(function (t) {
       if (!t) return;
-      var m = openModal('<div class="mh">Connect Claude</div><div class="mb">' +
-        '<div class="sub2">Claude Code on a computer on this network</div><div class="note">Run once in Terminal:</div>' +
-        '<div class="copyrow"><pre class="cmd" id="cmdCode">' + esc(codeCmd(t)) + '</pre><button data-copy="cmdCode">Copy</button></div>' +
-        '<div class="sub2">claude.ai, Claude Desktop and the phone app</div>' + webSteps(snap, 'm') +
-        '<div class="sub2">Try it</div><div class="note">Ask Claude: <b>"Use HomeClaude to give me an overview of my Home Assistant."</b></div>' +
+      var x = siteById(snap, id);
+      var m = openModal('<div class="mh">Connect Claude' + (multi(snap) && x ? ' to ' + esc(x.name) : '') + '</div><div class="mb">' + connectHtml(t, id) +
         '</div><div class="mf"><button id="mMore">More options</button><span class="sp"></span><button id="mClose" class="on">Done</button></div>', true);
       $('#mClose', m).onclick = closeModal;
       $('#mMore', m).onclick = function () { closeModal(); showTab(true); showSub('claude'); };
@@ -714,7 +768,7 @@
   function actRows(list, max) {
     if (!list.length) return '<div class="note" style="padding:12px 0">Nothing yet. When Claude uses HomeClaude, every request shows up here.</div>';
     return list.slice(0, max).map(function (a) {
-      return '<div class="arow"><span class="dot ' + (a.ok ? 'ok' : 'bad') + '"></span><div class="an"><b>' + esc(a.tool) + '</b>' + (a.who ? ' <small style="color:var(--dim)">' + esc(a.who) + (a.remote ? ' · outside' : '') + '</small>' : '') + (a.args ? '<span title="' + esc(a.args) + '">' + esc(a.args) + '</span>' : '') +
+      return '<div class="arow"><span class="dot ' + (a.ok ? 'ok' : 'bad') + '"></span><div class="an"><b>' + esc(a.tool) + '</b>' + (multi(snap) ? ' ' + siteChip(snap, a.site) : '') + (a.who ? ' <small style="color:var(--dim)">' + esc(a.who) + (a.remote ? ' · outside' : '') + '</small>' : '') + (a.args ? '<span title="' + esc(a.args) + '">' + esc(a.args) + '</span>' : '') +
         (a.error ? '<span class="aerr">' + esc(a.error) + '</span>' : '') + '</div><div class="aw">' + esc(ago(a.t)) + (a.ms ? ' · ' + a.ms + ' ms' : '') + (a.write ? '<span class="chip w">change</span>' : '') + '</div></div>';
     }).join('');
   }
@@ -722,9 +776,18 @@
   function renderHeader(s) {
     $('#hVer').textContent = 'v' + s.version;
     var st = s.ha.status || {}, a = s.access, out = [];
-    if (!st.configured) out.push('<span class="st warn"><span class="dot warn"></span>Home Assistant not set up</span>');
-    else if (st.ok) out.push('<span class="st ok"><span class="dot ok"></span>Home Assistant ' + esc(st.version) + '</span>');
-    else out.push('<span class="st bad"><span class="dot bad"></span>Home Assistant unreachable</span>');
+    if (multi(s)) sitesOf(s).forEach(function (x) {
+      var xs = x.ha.status || {}, c = !xs.configured ? 'warn' : xs.ok ? 'ok' : 'bad';
+      out.push('<span class="st ' + c + '"><i class="sw" style="--sc:' + esc(x.color) + '"></i>' + esc(x.name) + ' ' + (!xs.configured ? 'not set up' : xs.ok ? esc(xs.version) : 'unreachable') + '</span>');
+      if (x.frozen) out.push('<span class="st warn"><span class="dot warn"></span>' + esc(x.name) + ': changes paused until ' + esc(x.frozen.untilText) + '</span>');
+    });
+    else {
+      if (!st.configured) out.push('<span class="st warn"><span class="dot warn"></span>Home Assistant not set up</span>');
+      else if (st.ok) out.push('<span class="st ok"><span class="dot ok"></span>Home Assistant ' + esc(st.version) + '</span>');
+      else out.push('<span class="st bad"><span class="dot bad"></span>Home Assistant unreachable</span>');
+      var h0 = siteById(s, 'home');
+      if (h0 && h0.frozen) out.push('<span class="st warn"><span class="dot warn"></span>Changes paused until ' + esc(h0.frozen.untilText) + '</span>');
+    }
     var mt = modeText(a);
     var lc = !a.enabled ? 'bad' : a.local === 'read' ? 'ok' : 'warn';
     out.push('<span class="st ' + lc + '"><span class="dot ' + lc + '"></span>Claude: ' + esc(mt) + '</span>');
@@ -740,7 +803,7 @@
     else if (h && h.level === 'warn') out.push('<span class="st warn"><span class="dot warn"></span>System warning</span>');
     if (s.demo) out.push('<span class="st">Demo</span>');
     $('#status').innerHTML = out.join('');
-    $('#chkAll').classList.toggle('spin', !!st.checking);
+    $('#chkAll').classList.toggle('spin', sitesOf(s).some(function (x) { return x.ha.status && x.ha.status.checking; }) || !!st.checking);
   }
 
   function lvlCls(l) { return l === 'bad' ? 'bad' : l === 'warn' ? 'warn2' : 'good'; }
@@ -762,19 +825,22 @@
   $('#sysTest').onclick = function () { var b = this; b.disabled = true; api('api/health-check', {}).then(function () { b.disabled = false; toast('Checked', true); }); };
 
   function renderMain(s) {
-    var st = s.ha.status || {}, a = s.access;
-    // alerts
+    var st = s.ha.status || {}, a = s.access, hs = siteById(s, 'home');
+    // alerts (with more than one site, each says which site it is about)
     var al = [];
     if (!st.configured || !(s.setup && s.setup.completed)) al.push('<div class="errbox">' + (st.configured ? 'Setup is not finished yet.' : 'Home Assistant is not set up yet.') + ' <button id="alSetup" class="on">Open the setup guide</button></div>');
-    else if (!st.ok && st.error) al.push('<div class="errbox">' + esc(st.error) + '</div>');
+    else if (!st.ok && st.error) al.push('<div class="errbox">' + (multi(s) && hs ? '<b>' + esc(hs.name) + ':</b> ' : '') + esc(st.error) + '</div>');
+    sitesOf(s).forEach(function (x) { var xs = x.ha.status || {}; if (x.id !== 'home' && xs.configured && !xs.ok && xs.error) al.push('<div class="errbox"><b>' + esc(x.name) + ':</b> ' + esc(xs.error) + '</div>'); });
     if (!a.enabled) al.push('<div class="errbox">Claude access is off: every request is refused.</div>');
     if (s.health && s.health.storage.level === 'bad') al.push('<div class="errbox"><b>HomeClaude cannot save.</b> ' + esc(s.health.storage.problems.join(' ')) + '</div>');
     $('#alerts').innerHTML = al.join('');
     var as = $('#alSetup'); if (as) as.onclick = function () { openWizard(); };
 
-    // Home Assistant card
+    // Home Assistant card (the home site); with more sites, each gets a card of its own next to it
     var hc = $('#haCard');
-    hc.className = 'dev ' + (!st.configured ? 'none' : st.ok ? '' : 'off');
+    hc.className = 'dev ' + (!st.configured ? 'none' : st.ok ? '' : 'off') + (multi(s) ? ' site' : '');
+    hc.style.setProperty('--sc', hs ? hs.color : '');
+    $('.dn', hc).textContent = multi(s) && hs ? hs.name : 'Home Assistant';
     $('#haDot').className = 'dot ' + (!st.configured ? '' : st.ok ? 'ok' : 'bad');
     $('#haSub').textContent = s.ha.url || 'No address yet';
     var r = '';
@@ -784,9 +850,12 @@
       if (st.name) r += row('Location', esc(st.name));
       if (st.ok) r += row('Response', esc(st.ms) + ' ms');
     } else r += row('Status', '<span class="up">Not set up</span><small>Add the address and an access token in Settings</small>');
+    if (hs && (hs.frozen || hs.freeze.enabled)) r += row('Services', hs.frozen ? '<span class="warn2">Changes paused</span><small>until ' + esc(hs.frozen.untilText) + '</small>' : 'Changes paused during ' + esc(hs.freeze.text));
+    if (multi(s) && hs) r += row('Claude', esc(modeText(s.access)) + '<small>Connector: ' + esc(sitePathOf('home')) + '</small>');
     $('#haRows').innerHTML = r;
     $('#haWhen').textContent = st.checkedAt ? 'Checked ' + ago(st.checkedAt) : '';
     $('#haOpen').classList.toggle('hide', !s.ha.url || s.demo);
+    renderSiteCards(s);
 
     // Claude access card
     var mt = modeText(a);
@@ -835,7 +904,7 @@
     $('#rvWhat').classList.toggle('hide', !s.review.timeoutMin);
     var done = (s.reviews || []).filter(function (r) { return r.status !== 'waiting'; });
     $('#rvHist').innerHTML = done.length ? done.slice(0, 30).map(function (r) {
-      return '<div class="rhist"><span class="dot ' + (r.status === 'kept' ? 'ok' : r.status === 'reverted' ? 'warn' : '') + '"></span><span><b>' + esc(r.alias) + '</b> <small>' + esc(r.kind) + ' ' + esc(r.action || 'made and deleted again') + ' by ' + esc(r.who || 'Claude') + '</small></span>' +
+      return '<div class="rhist"><span class="dot ' + (r.status === 'kept' ? 'ok' : r.status === 'reverted' ? 'warn' : '') + '"></span><span>' + siteChip(s, r.site) + ' <b>' + esc(r.alias) + '</b> <small>' + esc(r.kind) + ' ' + esc(r.action || 'made and deleted again') + ' by ' + esc(r.who || 'Claude') + '</small></span>' +
         '<small>' + esc(r.status === 'withdrawn' ? 'nothing left to review' : r.status + (r.by && r.by !== 'you' ? ' (' + r.by + ')' : '')) + ' · ' + esc(ago(r.decidedAt)) + '</small></div>';
     }).join('') : '<div class="note">Nothing yet. Kept and reverted changes show up here.</div>';
     renderWho(s);
@@ -846,7 +915,12 @@
     // activity
     $('#actNote').textContent = s.activityTotal ? 'Newest first. Showing ' + Math.min(60, s.activityTotal) + ' of ' + s.activityTotal + ' kept (the last 300).' : '';
     $('#actFull').innerHTML = actRows(s.activity || [], 60);
-    // backups
+    // sites
+    if (subPane === 'sites') renderSitesPane(s);
+    // backups (each site keeps its own)
+    if (!siteById(s, bkSite)) bkSite = 'home';
+    var bks = multi(s) ? '<div class="seg" id="bkSeg">' + sitesOf(s).map(function (x) { return '<button data-v="' + esc(x.id) + '"' + (x.id === bkSite ? ' class="on"' : '') + '>' + esc(x.name) + '</button>'; }).join('') + '</div>' : '';
+    if ($('#bkSites').dataset.sig !== bks) { $('#bkSites').dataset.sig = bks; $('#bkSites').innerHTML = bks; $$('#bkSeg button').forEach(function (b) { b.onclick = function () { bkSite = b.dataset.v; paintSeg($('#bkSeg'), bkSite); loadBackups(); }; }); }
     if (subPane === 'backups' && bkSig !== s.backupCount) { bkSig = s.backupCount; loadBackups(); }
     // settings
     if (!keepLoaded) { $('#bkKeep').value = s.backup.keep; keepLoaded = true; }
@@ -869,7 +943,7 @@
     renderApprovals(s);
     renderReviews(s);
     renderSecButton(s);
-    if (inWizard) renderWizard(s); else if (inSecurity) renderSecurity(s); else if (inSetup) updateSettings(s); else renderMain(s);
+    if (inAddSite) renderAddSite(s); else if (inWizard) renderWizard(s); else if (inSecurity) renderSecurity(s); else if (inSetup) updateSettings(s); else renderMain(s);
   }
 
   // ---------- keep or revert ----------
@@ -928,13 +1002,13 @@
   var ACT = { changed: ['changed', 'acc'], created: ['created', 'o'], deleted: ['deleted', 'b'] };
   function renderReviews(s) {
     var list = (s.reviews || []).filter(function (r) { return r.status === 'waiting'; });
-    var sig = JSON.stringify(list.map(function (r) { return [r.rid, r.updatedAt, r.autoAt, !!rvOpen[r.rid]]; }));
+    var sig = JSON.stringify(list.map(function (r) { return [r.rid, r.updatedAt, r.autoAt, !!rvOpen[r.rid]]; })) + JSON.stringify(sitesOf(s).map(function (x) { return [x.id, x.name, x.color]; }));
     if (sig === rvSig) return;
     rvSig = sig;
     $('#reviews').innerHTML = list.map(function (r) {
       var a = ACT[r.action] || [r.action, ''];
       var auto = r.autoAt ? '<span class="tm">' + (s.review.ifNoAnswer === 'revert' ? 'Reverts' : 'Kept') + ' automatically in <b data-until="' + Number(r.autoAt) + '">' + left(r.autoAt - Date.now()) + '</b></span>' : '<span class="tm">waiting for you</span>';
-      return '<div class="rev"><div class="ah"><span class="dot acc"></span>' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : r.kind === 'zwave' ? 'changed Z-Wave settings: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'scene' ? 'a scene' : r.kind === 'helper' ? 'a helper' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : r.kind === 'zwave' ? 'Z-Wave' : a[0]) + '</span>' + auto + '</div>' +
+      return '<div class="rev"' + (multi(s) && siteById(s, r.site) ? ' style="border-left-color:' + esc(siteById(s, r.site).color) + '"' : '') + '><div class="ah"><span class="dot acc"></span>' + siteChip(s, r.site) + ' ' + esc(r.who || 'Claude') + ' ' + (r.kind === 'organize' ? 'organized: ' + esc(r.alias) : r.kind === 'zwave' ? 'changed Z-Wave settings: ' + esc(r.alias) : esc(a[0]) + ' ' + (r.kind === 'script' ? 'a script' : r.kind === 'scene' ? 'a scene' : r.kind === 'helper' ? 'a helper' : r.kind === 'dashboard' ? 'a dashboard' : r.kind === 'esphome' ? 'an ESPHome config' : 'an automation') + ': ' + esc(r.alias)) + ' <span class="chip ' + a[1] + '">' + esc(r.kind === 'organize' ? (r.action === 'created' ? 'new' : 'labels & categories') : r.kind === 'zwave' ? 'Z-Wave' : a[0]) + '</span>' + auto + '</div>' +
         '<div class="sub">' + esc(when(r.at)) + (r.where === 'outside' ? ' · from outside' : '') + (r.changes > 1 ? ' · changed ' + r.changes + ' times; Revert goes back to the version before the first change' : '') + (r.kind === 'organize' || r.kind === 'helper' ? '' : r.kind === 'zwave' ? ' · Revert sends the old values back (a sleeping device gets them when it next wakes up)' : ' · the old version is backed up') + '</div>' +
         (rvOpen[r.rid] ? '<div class="diff">' + diffHtml(revLines(r, r.before), revLines(r, r.after)) + '</div>' : '') +
         '<div class="af"><button data-rvshow="' + r.rid + '">' + (rvOpen[r.rid] ? 'Hide changes' : 'Show changes') + '</button><span class="sp"></span>' +
@@ -978,12 +1052,13 @@
 
   function renderApprovals(s) {
     var list = (s.security && s.security.pending) || [];
-    var sig = list.map(function (p) { return p.id + (apScope[p.id] || 'read') + (apSpan[p.id] || ''); }).join('|') + (s.security && s.security.accessDefault);
+    var sig = list.map(function (p) { return p.id + (apScope[p.id] || 'read') + (apSpan[p.id] || ''); }).join('|') + (s.security && s.security.accessDefault) + multi(s);
     if (sig === apSig) return;
     apSig = sig;
     $('#approvals').innerHTML = list.map(function (p) {
       var sc = apScope[p.id] || 'read';
-      return '<div class="appr"><div class="ah"><span class="dot warn"></span>Claude wants to connect from outside<span class="tm">Request expires in <b data-until="' + Number(p.expiresAt) + '" data-fmt="mmss">' + left(p.expiresAt - Date.now(), true) + '</b></span></div>' +
+      var px = multi(s) ? siteById(s, p.site) : null;
+      return '<div class="appr"' + (px ? ' style="border-left-color:' + esc(px.color) + '"' : '') + '><div class="ah"><span class="dot warn"></span>Claude wants to connect from outside' + (px ? ' to <span class="chip sitec" style="--sc:' + esc(px.color) + '">' + esc(px.name) + '</span>' : '') + '<span class="tm">Request expires in <b data-until="' + Number(p.expiresAt) + '" data-fmt="mmss">' + left(p.expiresAt - Date.now(), true) + '</b></span></div>' +
         '<div class="ab"><div class="acode">' + esc(p.code) + '</div><div class="ai2"><b>' + esc(p.client) + '</b>' + (p.clientHost ? esc(p.clientHost) + ' · ' : '') + 'from ' + esc(p.ip) + ' · ' + esc(ago(p.createdAt)) +
         '<br>Approve only if the sign-in page you just opened shows this same code.</div></div>' +
         '<div class="af"><span class="note">It may</span>' + scopeSeg('data-aps', p.id, sc) + '<span class="note">for</span>' + spanSelect('data-apspan', p.id, apSpan[p.id] || (s.security && s.security.accessDefault) || 'none') +
@@ -1039,11 +1114,11 @@
       '<ol class="steps"><li><b>Cloudflare Tunnel:</b> add a public hostname (for example <code>homeclaude.yourdomain.com</code>) with service <code>http://' + esc(host) + ':9086</code>.</li>' +
       '<li><b>Nginx Proxy Manager, Caddy or Traefik:</b> a proxy host for that name, forwarding to <code>' + esc(host) + ':9086</code>, with an https certificate.</li>' +
       '<li>Keep the host name and send <code>X-Forwarded-Proto: https</code> (all of these do by default). HomeClaude refuses plain http and other host names.</li></ol>';
-    var cs = JSON.stringify(sec.connections || []);
+    var cs = JSON.stringify(sec.connections || []) + multi(s);
     if (cs !== connSig) {
       connSig = cs;
       $('#secConns').innerHTML = (sec.connections || []).length ? sec.connections.map(function (c) {
-        return '<div class="conn"><div class="ci"><b>' + esc(c.client) + '</b><span>Signed in ' + esc(when(c.createdAt)) + ' · ' + (c.lastUsedAt ? 'last used ' + esc(ago(c.lastUsedAt)) + (c.lastIp ? ' from ' + esc(c.lastIp) : '') : 'not used yet') + ' · ' + plural(c.uses, 'request') + '</span>' +
+        return '<div class="conn"><div class="ci"><b>' + esc(c.client) + '</b> ' + siteChip(s, c.site) + '<span>Signed in ' + esc(when(c.createdAt)) + ' · ' + (c.lastUsedAt ? 'last used ' + esc(ago(c.lastUsedAt)) + (c.lastIp ? ' from ' + esc(c.lastIp) : '') : 'not used yet') + ' · ' + plural(c.uses, 'request') + '</span>' +
           '<span class="acc-left">' + (c.expiresAt ? 'Access ends in <b data-until="' + Number(c.expiresAt) + '">' + left(c.expiresAt - Date.now()) + '</b>' : 'No time limit (ends after 30 days unused)') + '</span></div>' +
           '<span class="note">' + esc(LVL_NAME[c.effective] || c.effective) + ' · <button class="link" data-golvl>change</button></span><span class="cspan">' + spanSelect('data-cspan', c.id, '') + '</span><button class="danger" data-revoke="' + esc(c.id) + '">Revoke</button></div>';
       }).join('') : '<div class="note">' + (ex ? 'None yet. When Claude signs in from outside and you approve it, it shows up here.' : 'None. Connections from outside need exposed mode.') + '</div>';
@@ -1150,20 +1225,21 @@
 
   // ---------- backups ----------
   function loadBackups() {
-    fetch('api/backups', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+    var site = bkSite;
+    fetch('api/backups?site=' + encodeURIComponent(site), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
       var list = j.backups || [];
       if (!list.length) { $('#bkList').innerHTML = '<div class="note">' + (snap && snap.demo ? 'Demo mode keeps no backups.' : 'No backups yet. They appear when Claude changes or deletes an automation, script, dashboard or ESPHome config.') + '</div>'; return; }
       $('#bkList').innerHTML = list.map(function (b, i) {
         return '<div class="bk"><span><b>' + esc(b.alias || b.id) + '</b> <small>' + esc(b.kind) + ' ' + esc(b.id) + '</small><br><small>' + esc(when(b.savedAt)) + ' · ' + esc(String(b.reason).replace(/-/g, ' ')) + '</small></span>' +
           '<button data-dl="' + i + '">Download</button><button data-rs="' + i + '">Restore</button></div>';
       }).join('');
-      $$('[data-dl]', $('#bkList')).forEach(function (btn) { btn.onclick = function () { var b = list[btn.dataset.dl]; location.href = 'api/backup?kind=' + encodeURIComponent(b.kind) + '&id=' + encodeURIComponent(b.id) + '&file=' + encodeURIComponent(b.file) + '&pin=' + encodeURIComponent(pin); }; });
+      $$('[data-dl]', $('#bkList')).forEach(function (btn) { btn.onclick = function () { var b = list[btn.dataset.dl]; location.href = 'api/backup?site=' + encodeURIComponent(site) + '&kind=' + encodeURIComponent(b.kind) + '&id=' + encodeURIComponent(b.id) + '&file=' + encodeURIComponent(b.file) + '&pin=' + encodeURIComponent(pin); }; });
       $$('[data-rs]', $('#bkList')).forEach(function (btn) {
         btn.onclick = function () {
           var b = list[btn.dataset.rs];
           confirmBox('Restore ' + (b.alias || b.id) + '?', '<p>Puts the ' + esc(b.kind) + ' back the way it was on ' + esc(when(b.savedAt)) + '. The current version is backed up first. Home Assistant reloads it right away.</p>', 'Restore').then(function (yes) {
             if (!yes) return;
-            api('api/restore', { kind: b.kind, id: b.id, file: b.file }).then(function (j) { report(j, 'Could not restore'); if (j.ok) { toast('Restored', true); loadBackups(); } });
+            api('api/restore', { site: site, kind: b.kind, id: b.id, file: b.file }).then(function (j) { report(j, 'Could not restore'); if (j.ok) { toast('Restored', true); loadBackups(); } });
           });
         };
       });
@@ -1180,7 +1256,7 @@
   $$('#espOn button').forEach(function (b) { b.onclick = function () { api('api/esphome', { enabled: b.dataset.v === '1' }).then(function (j) { report(j, 'Could not save'); }); }; });
   $('#espSave').onclick = function () { api('api/esphome', { url: $('#espUrl').value }).then(function (j) { report(j, 'Could not save'); if (j.ok) { espLoaded = false; toast('Saved. Testing…', true); } }); };
   $('#espTest').onclick = function () { var b = this; b.disabled = true; api('api/esphome-test', {}).then(function (j) { b.disabled = false; if (j.ok) toast('Found ' + plural(j.devices || 0, 'device'), true); else report(j, 'Could not reach the ESPHome Device Builder'); }); };
-  $('#chkAll').onclick = function () { api('api/ha-test', {}).then(function (j) { if (!j.ok) report(j, 'Could not reach Home Assistant'); }); };
+  $('#chkAll').onclick = function () { api('api/ha-test', { all: true }).then(function (j) { if (!j.ok) report(j, 'Could not reach Home Assistant'); }); };
   $('#haOpen').onclick = function () { if (snap && snap.ha.url) window.open(snap.ha.url, '_blank', 'noopener'); };
   $('#haSave').onclick = function () {
     var body = { url: $('#haUrl').value.trim() }, tok = $('#haTok').value.trim();
@@ -1214,15 +1290,15 @@
   var whoSig = '';
   function renderWho(s) {
     var a = s.access, sec = s.security || {}, ex = sec.mode === 'exposed', t = sec.totp || {};
-    var sig = JSON.stringify([a.local, a.outsideMax, ex, (sec.connections || []).map(function (c) { return [c.id, c.scope, c.effective]; }), sec.allowTokenRemote, sec.tokenScope, t.enabled, t.maxScope]);
+    var sig = JSON.stringify([a.local, a.outsideMax, ex, (sec.connections || []).map(function (c) { return [c.id, c.scope, c.effective, c.site]; }), sec.allowTokenRemote, sec.tokenScope, t.enabled, t.maxScope, sitesOf(s).map(function (x) { return [x.id, x.name, x.access.outsideMax]; })]);
     if (sig === whoSig) return;
     whoSig = sig;
-    var cap = function (lvl) { var e = LEVELS_UP_TO(a.outsideMax).indexOf(lvl) >= 0 ? lvl : a.outsideMax; return e !== lvl ? '<span class="warn2" style="font-size:12px"> · limited to ' + esc(LVL_NAME[e]) + ' by the outside limit</span>' : ''; };
+    var cap = function (lvl, site) { var x = siteById(s, site), om = x ? x.access.outsideMax : a.outsideMax; var e = LEVELS_UP_TO(om).indexOf(lvl) >= 0 ? lvl : om; return e !== lvl ? '<span class="warn2" style="font-size:12px"> · limited to ' + esc(LVL_NAME[e]) + ' by ' + (x && !x.primary ? esc(x.name) + '\'s' : 'the') + ' outside limit</span>' : ''; };
     var h = '<div class="set first"><div class="sl"><b>Claude on your network</b><span>Claude Code with the access token, on HomeClaude\'s private port</span></div><div class="sc">' + lvlSeg('data-lvl', 'local', a.local, 'full') + '</div></div>';
     h += '<div class="set"><div class="sl"><b>Highest level from outside</b><span>A limit over every connection through the public address. Full is never allowed from outside</span></div><div class="sc">' + lvlSeg('data-lvl', 'outsideMax', a.outsideMax, 'hands') + '</div></div>';
     if (ex) {
       (sec.connections || []).forEach(function (c) {
-        h += '<div class="set"><div class="sl"><b>' + esc(c.client) + '</b><span>Connection from outside, signed in ' + esc(when(c.createdAt)) + cap(c.scope) + '</span></div><div class="sc">' + lvlSeg('data-clvl', c.id, c.scope, 'hands') + '</div></div>';
+        h += '<div class="set"><div class="sl"><b>' + esc(c.client) + ' ' + siteChip(s, c.site) + '</b><span>Connection from outside, signed in ' + esc(when(c.createdAt)) + cap(c.scope, c.site) + '</span></div><div class="sc">' + lvlSeg('data-clvl', c.id, c.scope, 'hands') + '</div></div>';
       });
       if (!(sec.connections || []).length) h += '<div class="set"><div class="sl"><span>No connections from outside yet. When you approve one, you choose its level, and it appears here.</span></div></div>';
       if (sec.allowTokenRemote) h += '<div class="set"><div class="sl"><b>Access token from outside</b><span>Apps that send the token as a header over the public address' + cap(sec.tokenScope) + '</span></div><div class="sc">' + lvlSeg('data-tlvl', 'x', sec.tokenScope, 'hands') + '</div></div>';
@@ -1560,6 +1636,348 @@
     showTab(false);
   }
 
+
+  // ---------- sites: cards, the Sites pane, the site editor and the add-a-site guide ----------
+  var DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'], DAYN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var COLORS = ['#4c8dff', '#2ec4b6', '#f2994a', '#bb6bd9', '#eb5757', '#e2b93b', '#27ae60', '#56ccf2'];
+  function browserTz() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } }
+  function siteStatusHtml(st) {
+    if (!st.configured) return '<span class="up">Not set up</span><small>Add the address and an access token</small>';
+    if (st.checking) return 'Checking…';
+    if (st.ok) return '<span class="good">Connected</span> · ' + esc(st.version) + (st.ms ? ' · ' + esc(st.ms) + ' ms' : '') + (st.admin === false ? '<small class="bad">The token\'s user is not an administrator</small>' : '');
+    return '<span class="bad">Not reachable</span><small>' + esc(st.error) + '</small>';
+  }
+  function freezeHtml(x) {
+    if (x.frozen) return '<span class="warn2">Changes paused</span><small>until ' + esc(x.frozen.untilText) + '</small>';
+    if (x.freeze.enabled) return 'Paused during services<small>' + esc(x.freeze.text) + '</small>';
+    return 'No service-time pause';
+  }
+  function siteDone(x) { var m = x.marks || {}; return !!(x.ha.status && x.ha.status.ok && m.perms && m.freeze); }
+
+  var scSig = '';
+  function renderSiteCards(s) {
+    var list = sitesOf(s).filter(function (x) { return x.id !== 'home'; });
+    var sig = JSON.stringify(list.map(function (x) { var st = x.ha.status || {}; return [x.id, x.name, x.color, x.ha.url, st.ok, st.checking, st.error, st.version, st.ms, Math.round((Date.now() - (st.checkedAt || 0)) / 60000), x.access, x.frozen && x.frozen.untilText, x.freeze.text, x.freeze.enabled, x.waiting, siteDone(x)]; }));
+    if (sig === scSig) return;
+    scSig = sig;
+    $('#siteCards').innerHTML = list.map(function (x) {
+      var st = x.ha.status || {};
+      var cls = !st.configured ? 'none' : !st.ok ? 'off' : x.frozen ? 'upd' : '';
+      var r = row('Status', siteStatusHtml(st));
+      r += row('Claude', (x.access.enabled ? esc(LVL_NAME[x.access.local]) : '<span class="bad">Off</span>') + '<small>From outside up to ' + esc(LVL_NAME[x.access.outsideMax]) + ' · connector ' + esc(x.path) + '</small>');
+      r += row('Services', freezeHtml(x));
+      if (x.waiting) r += row('Review', '<span class="warn2">' + plural(x.waiting, 'change') + ' waiting</span>');
+      return '<div class="dev site ' + cls + '" style="--sc:' + esc(x.color) + '"><div class="dh"><span class="dot ' + (!st.configured ? '' : st.ok ? 'ok' : 'bad') + '"></span><div class="dn">' + esc(x.name) + '</div>' +
+        (siteDone(x) ? '' : '<button class="link" data-ssetup="' + esc(x.id) + '">Finish setup</button>') + '</div>' +
+        '<div class="dsub">' + esc(x.ha.url || 'No address yet') + '</div><div class="rows">' + r + '</div>' +
+        '<div class="df"><span class="when">' + (st.checkedAt ? 'Checked ' + ago(st.checkedAt) : '') + '</span><button data-stest="' + esc(x.id) + '">Test now</button><button data-sedit="' + esc(x.id) + '">Settings</button><button class="on" data-sconn="' + esc(x.id) + '">Connect</button></div></div>';
+    }).join('');
+  }
+
+  var spSig = '';
+  function renderSitesPane(s) {
+    var list = sitesOf(s);
+    var sig = JSON.stringify([list, s.publicUrl, s.security && s.security.mode]);
+    if (sig === spSig) return;
+    spSig = sig;
+    $('#sitesList').innerHTML = list.map(function (x) {
+      var st = x.ha.status || {};
+      var h = '<div class="card sitecard" style="--sc:' + esc(x.color) + '"><h2>' + esc(x.name) + (x.primary ? ' <span class="note" style="text-transform:none;letter-spacing:0;font-weight:400">· the first site</span>' : '') + '</h2>';
+      h += '<div class="set first"><div class="sl"><b>Home Assistant</b><span>' + esc(x.ha.url || 'No address yet') + '</span></div><div class="sc"><span class="val ' + (!st.configured ? 'warn' : st.ok ? 'ok' : 'bad') + '">' + (!st.configured ? 'Not set up' : st.ok ? 'Connected · ' + esc(st.version) : 'Not reachable') + '</span></div></div>';
+      h += '<div class="set"><div class="sl"><b>Claude</b><span>On your network: ' + esc(LVL_NAME[x.access.local]) + ' · from outside up to ' + esc(LVL_NAME[x.access.outsideMax]) + (x.access.enabled ? '' : ' · <b style="color:var(--bad)">switched off</b>') + '</span></div></div>';
+      h += '<div class="set"><div class="sl"><b>Service times</b><span>' + (x.frozen ? 'Changes paused now, until ' + esc(x.frozen.untilText) : x.freeze.enabled ? 'Changes paused during ' + esc(x.freeze.text) + ' (' + esc(x.freeze.tzEffective) + ')' : 'Off: Claude may change things at any time (within its level)') + '</span></div></div>';
+      h += '<div class="set"><div class="sl"><b>Connector</b><span><code>' + esc(x.path) + '</code> on this network' + (s.publicUrl ? ', <code>' + esc(s.publicUrl + x.path) + '</code> from outside' : '') + '</span></div></div>';
+      h += '<div class="set"><div class="sl"></div><div class="sc">' + (!x.primary ? '<button class="danger" data-sremove="' + esc(x.id) + '">Remove</button>' : '') +
+        (!x.primary && !siteDone(x) ? '<button data-ssetup="' + esc(x.id) + '">Finish setup</button>' : '') +
+        '<button data-sedit="' + esc(x.id) + '">Edit</button><button class="on" data-sconn="' + esc(x.id) + '">Connect Claude</button></div></div></div>';
+      return h;
+    }).join('');
+    var full = list.length - 1 >= (s.maxSites || 8);
+    $('#sitesAdd').disabled = !!s.demo || full;
+    $('#sitesAddNote').textContent = s.demo ? 'Demo mode has one simulated Home Assistant' : full ? 'This HomeClaude has as many sites as it allows' : 'A guided setup: name it, connect its Home Assistant, choose what Claude may do there and when changes are paused';
+  }
+
+  // one click handler for every site button, wherever it is
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-stest],[data-sedit],[data-sconn],[data-sremove],[data-ssetup]');
+    if (!b) return;
+    if (b.dataset.stest) { b.disabled = true; api('api/ha-test', { site: b.dataset.stest }).then(function (j) { b.disabled = false; if (j.ok) toast('Home Assistant answered', true); else report(j, 'Could not reach Home Assistant'); }); }
+    if (b.dataset.sedit) { closeModal(); openSiteEditor(b.dataset.sedit); }
+    if (b.dataset.sconn) { closeModal(); openConnect(b.dataset.sconn); }
+    if (b.dataset.ssetup) { closeModal(); openAddSite(b.dataset.ssetup); }
+    if (b.dataset.sremove) {
+      var x = siteById(snap, b.dataset.sremove);
+      confirmBox('Remove ' + (x ? x.name : b.dataset.sremove) + '?', '<p>HomeClaude forgets this site\'s address and token, its Claude connector stops working at once, and its connections from outside are revoked. Nothing changes in its Home Assistant. Its backups stay in HomeClaude\'s data folder.</p>', 'Remove', true).then(function (y) {
+        if (y) api('api/sites', { action: 'remove', site: b.dataset.sremove }).then(function (j) { report(j, 'Could not remove it'); if (j.ok) toast('Removed', true); });
+      });
+    }
+  });
+
+  // ----- the service times editor, used by the site editor and the guide -----
+  function fwHtml(list) {
+    if (!list.length) return '<div class="note" style="padding:8px 0">No service times yet.</div>';
+    return list.map(function (w, i) {
+      return '<div class="fwin" data-fw="' + i + '"><span class="days">' + DAYS.map(function (d, k) { return '<button type="button" title="' + DAYN[k] + '" data-fwd="' + k + '"' + (w.days.indexOf(k) >= 0 ? ' class="on"' : '') + '>' + d + '</button>'; }).join('') + '</span>' +
+        '<input type="time" data-fwf value="' + esc(w.from) + '" aria-label="From"><span class="note">to</span><input type="time" data-fwt value="' + esc(w.to) + '" aria-label="To">' +
+        '<input class="lbl" data-fwl placeholder="Name (optional)" value="' + esc(w.label || '') + '" aria-label="Name"><button type="button" class="link x danger" data-fwx>Remove</button></div>';
+    }).join('');
+  }
+  /** Draws the service times into box and keeps list in step with what is typed. */
+  function wireFw(box, list) {
+    var draw = function () {
+      box.innerHTML = fwHtml(list);
+      $$('[data-fw]', box).forEach(function (rowEl) {
+        var w = list[+rowEl.dataset.fw];
+        $$('[data-fwd]', rowEl).forEach(function (d) { d.onclick = function () { var k = +d.dataset.fwd, at = w.days.indexOf(k); if (at >= 0) w.days.splice(at, 1); else w.days.push(k); d.classList.toggle('on', at < 0); }; });
+        $('[data-fwf]', rowEl).onchange = function () { w.from = this.value; };
+        $('[data-fwt]', rowEl).onchange = function () { w.to = this.value; };
+        $('[data-fwl]', rowEl).oninput = function () { w.label = this.value; };
+        $('[data-fwx]', rowEl).onclick = function () { list.splice(+rowEl.dataset.fw, 1); draw(); };
+      });
+    };
+    draw();
+    return draw;
+  }
+  var FW_PRESETS = [['Sunday morning', { days: [0], from: '07:00', to: '13:00', label: 'Sunday service' }], ['Wednesday evening', { days: [3], from: '17:30', to: '21:00', label: 'Wednesday' }], ['Another time', { days: [], from: '09:00', to: '12:00', label: '' }]];
+  function freezeBlock(pre) {
+    return '<div class="set first"><div class="sl"><b>Pause changes during services</b><span>During these times Claude may only look at this Home Assistant, whatever level it has. Its change tools answer that changes are paused until the service ends</span></div><div class="sc"><div class="seg" id="' + pre + 'FzOn"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>' +
+      '<div class="set"><div class="sl"><b>Time zone</b><span>The times below are in this zone</span></div><div class="sc"><input id="' + pre + 'FzTz" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="America/Chicago" aria-label="Time zone"></div></div>' +
+      '<div id="' + pre + 'FzList"></div>' +
+      '<div class="set"><div class="sl"><span>Add a service time</span></div><div class="sc">' + FW_PRESETS.map(function (p, i) { return '<button type="button" data-fzadd="' + i + '">' + esc(p[0]) + '</button>'; }).join('') + '</div></div>';
+  }
+  /** Fills a freezeBlock; returns get() for what to save */
+  function wireFreeze(root, pre, f) {
+    var on = !!f.enabled, list = JSON.parse(JSON.stringify(f.windows || []));
+    paintSeg($('#' + pre + 'FzOn', root), on ? '1' : '0');
+    $$('#' + pre + 'FzOn button', root).forEach(function (b) { b.onclick = function () { on = b.dataset.v === '1'; paintSeg($('#' + pre + 'FzOn', root), on ? '1' : '0'); if (on && !list.length) { list.push(JSON.parse(JSON.stringify(FW_PRESETS[0][1]))); draw(); } }; });
+    $('#' + pre + 'FzTz', root).value = f.tz || browserTz() || f.tzEffective || '';
+    var draw = wireFw($('#' + pre + 'FzList', root), list);
+    $$('[data-fzadd]', root).forEach(function (b) { b.onclick = function () { list.push(JSON.parse(JSON.stringify(FW_PRESETS[+b.dataset.fzadd][1]))); if (!on) { on = true; paintSeg($('#' + pre + 'FzOn', root), '1'); } draw(); }; });
+    return function () { return { enabled: on, tz: $('#' + pre + 'FzTz', root).value.trim(), windows: list }; };
+  }
+
+  // ----- the site editor -----
+  function openSiteEditor(id) {
+    var x = siteById(snap, id);
+    if (!x) return;
+    var home = x.primary, lv = { local: x.access.local, outsideMax: x.access.outsideMax }, color = x.color, en = x.access.enabled, esp = x.esphome.enabled;
+    var m = openModal('<div class="mh">' + esc(x.name) + '</div><div class="mb">' +
+      '<div class="sub2">Name</div>' +
+      '<div class="set first"><div class="sl"><b>Name</b><span>Shown on this page, in approvals and to Claude</span></div><div class="sc"><input id="seName" class="txt wide" maxlength="40" value="' + esc(x.name) + '" aria-label="Name"></div></div>' +
+      '<div class="set"><div class="sl"><b>Color</b><span>Marks everything that belongs to this site</span></div><div class="sc"><div class="swatches" id="seColor">' + COLORS.map(function (c) { return '<button type="button" style="--sc:' + c + '" data-c="' + c + '" aria-label="' + c + '"' + (c === color ? ' class="on"' : '') + '></button>'; }).join('') + '</div></div></div>' +
+      '<div class="set"><div class="sl"><b>Connector</b><span><code>' + esc(x.path) + '</code>' + (home ? ' (the first site keeps the address it always had)' : '') + '</span></div></div>' +
+      '<div class="sub2">Home Assistant</div>' +
+      '<div class="set first"><div class="sl"><b>Address</b><span>The IP address and port, for example http://10.20.0.15:8123</span></div><div class="sc"><input id="seUrl" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="http://192.168.1.10:8123" value="' + esc(x.ha.url) + '" aria-label="Address"></div></div>' +
+      '<div class="set"><div class="sl"><b>Access token</b><span>A long-lived token from an administrator user</span></div><div class="sc"><input id="seTok" class="txt wide" type="password" autocomplete="new-password" placeholder="' + (x.ha.hasToken ? 'Saved (type to replace)' : 'Paste the token') + '" aria-label="Access token"></div></div>' +
+      '<div class="set"><div class="sl"><b>Status</b><span id="seStat">' + siteStatusHtml(x.ha.status || {}) + '</span></div><div class="sc"><button id="seTest">Test</button></div></div>' +
+      '<div class="sub2">What Claude may do here</div>' +
+      '<div class="set first"><div class="sl"><b>Claude access to this site</b><span>' + (home ? 'Off refuses every request, for every site' : 'Off refuses every request to this site only') + '</span></div><div class="sc"><div class="seg" id="seEn"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>' +
+      '<div class="set"><div class="sl"><b>Claude on your network</b><span>Claude Code with the access token</span></div><div class="sc">' + lvlSeg('data-selvl', 'local', lv.local, 'full') + '</div></div>' +
+      '<div class="set"><div class="sl"><b>Highest level from outside</b><span>A limit over every connection approved for this site</span></div><div class="sc">' + lvlSeg('data-selvl', 'outsideMax', lv.outsideMax, 'hands') + '</div></div>' +
+      '<div class="set"><div class="sl"><b>Blocked domains</b><span>Claude can read these but never act on them</span></div><div class="sc"><input id="seBlk" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" value="' + esc(x.access.blocked.join(', ')) + '" aria-label="Blocked domains"></div></div>' +
+      '<div class="set"><div class="sl"><b>ESPHome device configs</b><span>Through the ESPHome Device Builder app in this Home Assistant</span></div><div class="sc"><div class="seg" id="seEsp"><button data-v="1">On</button><button data-v="0">Off</button></div></div></div>' +
+      '<div class="sub2">Service times</div>' + freezeBlock('se') +
+      '<div id="seErr" class="formerr hide"></div>' +
+      '</div><div class="mf"><button id="seCancel">Cancel</button><span class="sp"></span><button id="seSave" class="on">Save</button></div>', true);
+    $$('#seColor button', m).forEach(function (b) { b.onclick = function () { color = b.dataset.c; $$('#seColor button', m).forEach(function (o) { o.classList.toggle('on', o === b); }); }; });
+    paintSeg($('#seEn', m), en ? '1' : '0'); $$('#seEn button', m).forEach(function (b) { b.onclick = function () { en = b.dataset.v === '1'; paintSeg($('#seEn', m), b.dataset.v); }; });
+    paintSeg($('#seEsp', m), esp ? '1' : '0'); $$('#seEsp button', m).forEach(function (b) { b.onclick = function () { esp = b.dataset.v === '1'; paintSeg($('#seEsp', m), b.dataset.v); }; });
+    $$('[data-selvl] button', m).forEach(function (b) { b.onclick = function () { var k = b.parentNode.dataset.selvl; lv[k] = b.dataset.v; paintSeg(b.parentNode, b.dataset.v); }; });
+    var getFz = wireFreeze(m, 'se', x.freeze);
+    $('#seTest', m).onclick = function () { var b = this; b.disabled = true; api('api/ha-test', { site: id }).then(function (j) { b.disabled = false; var y = siteById(snap, id); $('#seStat', m).innerHTML = y ? siteStatusHtml(y.ha.status || {}) : ''; if (!j.ok) report(j, 'Could not reach Home Assistant'); }); };
+    $('#seCancel', m).onclick = closeModal;
+    $('#seSave', m).onclick = function () {
+      var btn = this, err = $('#seErr', m);
+      var fail = function (j) { btn.disabled = false; if (j.cancelled) return; err.textContent = j.error || 'Could not save'; err.classList.remove('hide'); };
+      var url = $('#seUrl', m).value.trim(), tok = $('#seTok', m).value.trim(), blk = $('#seBlk', m).value;
+      var steps = [function () { return api('api/sites', { action: 'update', site: id, name: $('#seName', m).value, color: color, freeze: getFz() }); }];
+      if (url !== x.ha.url || tok) steps.push(function () { var b = { site: id, url: url }; if (tok) b.token = tok; return api('api/ha', b); });
+      steps.push(function () { return api('api/access', { site: id, enabled: en, local: lv.local, outsideMax: lv.outsideMax, blocked: blk }); });
+      if (esp !== x.esphome.enabled) steps.push(function () { return api('api/esphome', { site: id, enabled: esp }); });
+      var go = function () {
+        btn.disabled = true; err.classList.add('hide');
+        steps.reduce(function (p, f) { return p.then(function (j) { return j && !j.ok ? j : f(); }); }, Promise.resolve(null)).then(function (j) {
+          if (j && !j.ok) return fail(j);
+          closeModal(); toast('Saved', true); spSig = ''; scSig = ''; whoSig = '';
+        });
+      };
+      var raised = ['hands', 'full'].filter(function (l) { return (lv.local === l && x.access.local !== l) || (lv.outsideMax === l && x.access.outsideMax !== l); })[0];
+      var now = x.access.blocked, next = blk.split(/[\s,;]+/).filter(Boolean), removed = now.filter(function (d) { return next.indexOf(d) < 0; });
+      var warn = (raised ? '<p>' + esc(LVL_WARN[raised]) + '</p>' : '') + (removed.length ? '<p>Unblocking ' + esc(removed.join(', ')) + ': if Claude may call services or edit automations here, it will be able to act on them.</p>' : '');
+      if (warn) confirmBox('Allow more at ' + x.name + '?', warn, 'Save').then(function (y) { if (y) go(); });
+      else go();
+    };
+  }
+
+  // ----- the add-a-site guide: steps and their status down the left, one step at a time -----
+  var AS = [{ id: 'name', title: 'Name it' }, { id: 'token', title: 'Its Home Assistant' }, { id: 'perms', title: 'What Claude may do' }, { id: 'freeze', title: 'Service times' }, { id: 'claude', title: 'Connect Claude' }];
+  var asId = null, asStep = 0, asDrawn = '', asScrolled = -1, asTried = false, asTesting = false;
+  function asState(sid, x) {
+    if (!x) return sid === 'name' ? ['todo', 'Start here'] : ['todo', ''];
+    var st = x.ha.status || {}, m = x.marks || {};
+    switch (sid) {
+      case 'name': return ['done', x.name + ' · ' + x.path];
+      case 'token':
+        if (st.ok && st.admin === false) return ['bad', 'Not an administrator'];
+        if (st.ok) return ['done', 'Connected · ' + (st.version || '')];
+        if (st.configured && st.error && !st.checking) return ['bad', 'Not reachable'];
+        return ['todo', st.checking ? 'Testing…' : 'Address and token'];
+      case 'perms': return m.perms ? ['done', LVL_NAME[x.access.local] + ' · outside ' + LVL_NAME[x.access.outsideMax]] : ['todo', 'Look only to start'];
+      case 'freeze': return m.freeze === 'skip' ? ['skip', 'No pause'] : m.freeze ? ['done', x.freeze.enabled ? x.freeze.text : 'No pause'] : ['todo', 'Optional'];
+      case 'claude': return x.lastCallAt ? ['done', 'Claude connected'] : m.claude === 'skip' ? ['skip', 'Later'] : ['todo', 'Waiting for Claude'];
+    }
+    return ['todo', ''];
+  }
+  function openAddSite(id) {
+    asId = id || null; asDrawn = ''; asTried = false;
+    var x = asId && siteById(snap, asId);
+    asStep = 0;
+    if (x) { for (var i = 0; i < AS.length; i++) { var c = asState(AS[i].id, x)[0]; if (c === 'todo' || c === 'bad') { asStep = i; break; } asStep = AS.length - 1; } }
+    inAddSite = true; inSetup = false; inWizard = false; inSecurity = false;
+    ['#tab-main', '#tab-setup', '#tab-wizard', '#tab-security'].forEach(function (t) { $(t).classList.add('hide'); });
+    $('#tab-addsite').classList.remove('hide');
+    secBtn.classList.remove('on'); gear.classList.add('on'); gear.title = 'Close'; $('span', gear).textContent = 'Close';
+    document.body.classList.add('in-setup');
+    if (snap) render(snap);
+    window.scrollTo(0, 0);
+  }
+  function closeAddSite() {
+    inAddSite = false; asId = null;
+    $('#tab-addsite').classList.add('hide');
+    $('span', gear).textContent = 'Done';
+    showTab(true); showSub('sites');
+  }
+  function asGo(i) { asStep = Math.max(0, Math.min(AS.length - 1, i)); asDrawn = ''; asTried = false; if (snap) renderAddSite(snap); window.scrollTo(0, 0); }
+  function asFoot(main, opts) {
+    opts = opts || {};
+    return '<div class="wzf">' + (asStep > 0 ? '<button id="asBack">Back</button>' : '') + '<span class="sp"></span>' + (opts.alt ? '<button id="asAlt">' + esc(opts.alt) + '</button>' : '') +
+      '<button id="asNext" class="on"' + (opts.disabled ? ' disabled' : '') + '>' + esc(main) + '</button></div>';
+  }
+  function asHead(title, x) { return '<div class="wzk">' + (x ? esc(x.name) + ' · ' : 'New site · ') + 'Step ' + (asStep + 1) + ' of ' + AS.length + '</div><h3>' + esc(title) + '</h3>'; }
+  function asWire(onNext, onAlt) {
+    var b = $('#asBack'); if (b) b.onclick = function () { asGo(asStep - 1); };
+    var n = $('#asNext'); if (n) n.onclick = function () { n.disabled = true; Promise.resolve(onNext()).then(function (ok) { n.disabled = false; if (ok !== false) { if (asStep === AS.length - 1) closeAddSite(); else asGo(asStep + 1); } }); };
+    var a = $('#asAlt'); if (a && onAlt) a.onclick = onAlt;
+  }
+  function asMark(mk, v) { return api('api/sites', { action: 'mark', site: asId, mark: mk, value: v == null ? true : v }).then(function (j) { report(j, 'Could not save'); return j.ok; }); }
+  function renderAddSite(s) {
+    var x = asId ? siteById(s, asId) : null;
+    if (asId && !x) { closeAddSite(); return; }
+    var done = AS.filter(function (w) { var c = asState(w.id, x)[0]; return c === 'done' || c === 'skip'; }).length;
+    $('#asSide').innerHTML = '<div class="wzprog">' + (x ? esc(x.name) : 'New site') + ' · ' + done + ' of ' + AS.length + ' done</div>' +
+      AS.map(function (w, i) {
+        var st = asState(w.id, x);
+        return '<button class="wzs ' + st[0] + (i === asStep ? ' on' : '') + '" data-as="' + i + '"' + (!x && i > 0 ? ' disabled' : '') + '><span class="num">' + (st[0] === 'done' ? CHECK : st[0] === 'bad' ? '!' : i + 1) + '</span><span class="wt"><b>' + esc(w.title) + '</b><small>' + esc(st[1]) + '</small></span></button>';
+      }).join('');
+    $$('[data-as]', $('#asSide')).forEach(function (b) { b.onclick = function () { asGo(+b.dataset.as); }; });
+    var cur = $('.wzs.on', $('#asSide'));
+    if (cur && asScrolled !== asStep && $('#asSide').scrollWidth > $('#asSide').clientWidth) { asScrolled = asStep; $('#asSide').scrollLeft = cur.offsetLeft - 16; }
+    var w = AS[asStep], sig = w.id + '|' + (x ? x.id : '') + '|' + (w.id === 'claude' ? token + s.publicUrl + (s.security && s.security.mode) + !!(x && x.lastCallAt) : '');
+    if (sig !== asDrawn) { asDrawn = sig; asDraw(w.id, x, s); }
+    asLive(x);
+  }
+  function asLive(x) {
+    if (!x) return;
+    var st = x.ha.status || {};
+    var box = $('#asConn'), nx = $('#asNext');
+    if (box) {
+      if (asTesting || st.checking) box.innerHTML = '<div class="waitbox"><span class="spin"></span>Talking to ' + esc(x.name) + '\'s Home Assistant…</div>';
+      else if (st.ok && st.admin === false) box.innerHTML = '<div class="errbox">Connected to Home Assistant ' + esc(st.version) + ', but this user is <b>not an administrator</b>. In that Home Assistant, open Settings &gt; People &gt; Users, select the HomeClaude user and turn on Administrator, then press Connect again.</div>';
+      else if (st.ok) box.innerHTML = '<div class="okbox"><b>Connected.</b> Home Assistant ' + esc(st.version) + (st.name ? ' at ' + esc(st.name) : '') + ' answered in ' + esc(st.ms) + ' ms, and the user is an administrator.</div>';
+      else if (st.configured && st.error && asTried) box.innerHTML = '<div class="errbox"><b>Could not connect.</b> ' + esc(hintFor(st.error) || st.error) +
+        (/timed out|refused|not found|reach/.test(st.error) ? '<br>This Home Assistant is on another network: check that the link between the two networks is up, and that a firewall rule lets HomeClaude\'s machine reach it on port 8123.' : '') + '<br><small style="color:var(--dim)">' + esc(st.error) + '</small></div>';
+      else box.innerHTML = '';
+      if (nx) nx.disabled = !(st.ok && st.admin !== false);
+    }
+    var wbox = $('#asWait');
+    if (wbox) wbox.innerHTML = x.lastCallAt ? '<div class="okbox"><b>Claude is connected to ' + esc(x.name) + '.</b> Its last request was ' + esc(ago(x.lastCallAt)) + '.</div>' : '<div class="waitbox"><span class="spin"></span><span>Waiting for Claude\'s first request to ' + esc(x.name) + '. This turns green by itself.</span></div>';
+  }
+  function asDraw(sid, x, s) {
+    var pane = $('#asPane');
+    if (sid === 'name') {
+      var used = sitesOf(s).map(function (y) { return y.color; });
+      var color = x ? x.color : (COLORS.filter(function (c) { return used.indexOf(c) < 0; })[0] || COLORS[1]);
+      pane.innerHTML = asHead(x ? 'Name' : 'Add a site', x) + '<div class="wzbody">' +
+        '<p>A site is one Home Assistant, for example your church or an office. It gets its own Claude connector, so Claude working on one site can never reach another.</p>' +
+        '<div class="set first"><div class="sl"><b>Name</b><span>For example RHCC or Church</span></div><div class="sc"><input id="asName" class="txt wide" maxlength="40" value="' + esc(x ? x.name : '') + '" aria-label="Name"></div></div>' +
+        '<div class="set"><div class="sl"><b>Short name</b><span>' + (x ? 'Fixed once the site is made: it is part of the connector address' : 'Lowercase letters, digits and dashes. It becomes part of the connector address: /site/<b id="asIdShow">' + '…' + '</b>/mcp') + '</span></div><div class="sc"><input id="asIdIn" class="txt wide" maxlength="24" spellcheck="false" autocomplete="off" autocapitalize="off" value="' + esc(x ? x.id : '') + '"' + (x ? ' disabled' : '') + ' aria-label="Short name"></div></div>' +
+        '<div class="set"><div class="sl"><b>Color</b><span>Marks everything that belongs to this site</span></div><div class="sc"><div class="swatches" id="asColor">' + COLORS.map(function (c) { return '<button type="button" style="--sc:' + c + '" data-c="' + c + '"' + (c === color ? ' class="on"' : '') + ' aria-label="' + c + '"></button>'; }).join('') + '</div></div></div>' +
+        '<div id="asErr" class="formerr hide"></div></div>' + asFoot(x ? 'Next' : 'Make the site');
+      var touched = !!x, nm = $('#asName'), idIn = $('#asIdIn');
+      var slug = function (v) { return v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+/, '').replace(/-+$/, '').slice(0, 24); };
+      var show = function () { var e = $('#asIdShow'); if (e) e.textContent = idIn.value || '…'; };
+      nm.oninput = function () { if (!touched) { idIn.value = slug(nm.value); show(); } };
+      idIn.oninput = function () { touched = true; show(); };
+      show(); if (!x) nm.focus();
+      $$('#asColor button').forEach(function (b) { b.onclick = function () { color = b.dataset.c; $$('#asColor button').forEach(function (o) { o.classList.toggle('on', o === b); }); }; });
+      asWire(function () {
+        var err = $('#asErr');
+        var body = x ? { action: 'update', site: x.id, name: nm.value, color: color } : { action: 'add', id: idIn.value.trim(), name: nm.value, color: color };
+        return api('api/sites', body).then(function (j) {
+          if (!j.ok) { if (!j.cancelled) { err.textContent = j.error || 'Could not make it'; err.classList.remove('hide'); } return false; }
+          if (!x) asId = j.id;
+          // the new site has to be in the page's data before the next step draws
+          return fetch('api/state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (st) { render(st); return true; }).catch(function () { return true; });
+        });
+      });
+    }
+    if (sid === 'token') {
+      pane.innerHTML = asHead('Connect ' + x.name + '\'s Home Assistant', x) + '<div class="wzbody">' +
+        '<ol class="steps"><li>In that Home Assistant, go to <b>Settings &gt; People &gt; Users</b> and add a user just for this, for example <b>HomeClaude</b>. Turn on <b>Administrator</b>.</li>' +
+        '<li>Log in once as that user, open its <b>profile</b> (bottom left), the <b>Security</b> tab, and under <b>Long-lived access tokens</b> choose <b>Create token</b>.</li>' +
+        '<li>Paste the token below with the Home Assistant\'s address, and press <b>Connect</b>.</li></ol>' +
+        '<p>A separate user means everything Claude does there shows up in that Home Assistant\'s logbook under that name, and can be revoked there at any time.</p>' +
+        '<div class="set first"><div class="sl"><b>Address</b><span>The IP address and port as HomeClaude\'s machine reaches it, for example http://10.20.0.15:8123</span></div><div class="sc"><input id="asUrl" class="txt wide" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="http://10.20.0.15:8123" value="' + esc(x.ha.url) + '" aria-label="Address"></div></div>' +
+        '<div class="set"><div class="sl"><b>Access token</b><span>' + (x.ha.hasToken ? 'Saved. Paste a new one to replace it' : 'From the HomeClaude user\'s profile') + '</span></div><div class="sc"><input id="asTok" class="txt wide" type="password" autocomplete="new-password" placeholder="' + (x.ha.hasToken ? 'Saved' : 'Paste the token') + '" aria-label="Access token"><button id="asTest" class="on">Connect</button></div></div>' +
+        '<div id="asConn"></div></div>' + asFoot('Next', { disabled: true });
+      $('#asTest').onclick = function () {
+        var b = { site: x.id, url: $('#asUrl').value.trim() }, t = $('#asTok').value.trim();
+        if (t) b.token = t;
+        asTesting = true; asTried = true; asLive(x);
+        api('api/ha', b).then(function (j) {
+          if (!j.ok) { asTesting = false; report(j, 'Could not save'); asLive(siteById(snap, x.id)); return; }
+          $('#asTok').value = '';
+          return api('api/ha-test', { site: x.id }).then(function () { asTesting = false; asLive(siteById(snap, x.id)); });
+        });
+      };
+      asWire(function () { return true; });
+    }
+    if (sid === 'perms') {
+      var lv = { local: x.access.local, outsideMax: x.access.outsideMax };
+      pane.innerHTML = asHead('What Claude may do at ' + x.name, x) + '<div class="wzbody">' +
+        '<p>A new site starts at <b>Look only</b>, on your network and from outside: Claude can read everything, change nothing. You can raise it here or later.</p>' +
+        '<div class="set first"><div class="sl"><b>Claude on your network</b><span>Claude Code with the access token</span></div><div class="sc">' + lvlSeg('data-aslvl', 'local', lv.local, 'full') + '</div></div>' +
+        '<div class="set"><div class="sl"><b>Highest level from outside</b><span>claude.ai and the phone app, through exposed mode</span></div><div class="sc">' + lvlSeg('data-aslvl', 'outsideMax', lv.outsideMax, 'hands') + '</div></div>' +
+        '<div class="set"><div class="sl"><b>Blocked</b><span>' + esc(x.access.blocked.join(', ') || 'Nothing') + '. Claude can read these but never act on them. Change it in the site\'s settings</span></div></div>' +
+        '<div class="note" style="margin-top:8px">' + LVL.map(function (l) { return '<b>' + esc(l[1]) + ':</b> ' + esc(l[2]); }).join('<br>') + '</div></div>' + asFoot('Next');
+      $$('[data-aslvl] button').forEach(function (b) { b.onclick = function () { var k = b.parentNode.dataset.aslvl, v = b.dataset.v; raise(v, function () { lv[k] = v; paintSeg(b.parentNode, v); }); }; });
+      asWire(function () { return api('api/access', { site: x.id, local: lv.local, outsideMax: lv.outsideMax }).then(function (j) { report(j, 'Could not save'); return j.ok ? asMark('perms') : false; }); });
+    }
+    if (sid === 'freeze') {
+      pane.innerHTML = asHead('Pause changes during services', x) + '<div class="wzbody">' +
+        '<p>During the times you set here, Claude may only look at ' + esc(x.name) + '\'s Home Assistant, even if it may change things the rest of the week. Handy for Sunday mornings and midweek services.</p>' +
+        '<div class="card" style="padding:0 0 4px;border:0;background:transparent;margin:0">' + freezeBlock('as') + '</div>' +
+        '<div id="asErr" class="formerr hide"></div></div>' + asFoot('Save and continue', { alt: 'No pause' });
+      var getFz = wireFreeze(pane, 'as', x.freeze);
+      asWire(function () {
+        return api('api/sites', { action: 'update', site: x.id, freeze: getFz() }).then(function (j) {
+          if (!j.ok) { if (!j.cancelled) { $('#asErr').textContent = j.error || 'Could not save'; $('#asErr').classList.remove('hide'); } return false; }
+          return asMark('freeze');
+        });
+      }, function () { api('api/sites', { action: 'update', site: x.id, freeze: { enabled: false } }).then(function () { return asMark('freeze', 'skip'); }).then(function (ok) { if (ok) asGo(asStep + 1); }); });
+    }
+    if (sid === 'claude') {
+      pane.innerHTML = asHead('Connect Claude to ' + x.name, x) + '<div class="wzbody">' +
+        '<p>' + esc(x.name) + ' has its own connector, separate from your other sites. Add it next to the ones you already have.</p>' +
+        '<div id="asConnect">' + (token ? connectHtml(token, x.id) : '<button class="on" id="asShowTok">Show the connection details</button>') + '</div>' +
+        '<div id="asWait"></div></div>' + asFoot('Finish', { alt: x.lastCallAt ? null : 'Do this later' });
+      var st2 = $('#asShowTok'); if (st2) st2.onclick = function () { getToken().then(function () { asDrawn = ''; renderAddSite(snap); }); };
+      asWire(function () { return asMark('claude', x.lastCallAt ? true : 'skip').then(function () { toast(x.name + ' is set up', true); return true; }); }, function () { asMark('claude', 'skip').then(function () { closeAddSite(); }); });
+    }
+  }
+  $('#sitesAdd').onclick = function () { openAddSite(null); };
+  $('#sitesBtn').onclick = function () { showTab(true); showSub('sites'); };
+
   // ---------- tabs ----------
   var gear = $('#gear');
   function showSub(name) {
@@ -1569,26 +1987,27 @@
     if (name === 'ha') haLoaded = espLoaded = false;
     if (name === 'perm') { blkLoaded = false; whoSig = ''; }
     if (name === 'backups') { bkSig = null; }
+    if (name === 'sites') { spSig = ''; }
     if (name === 'settings') { keepLoaded = false; paintSeg($('#themeSeg'), themePref); }
     if (snap) updateSettings(snap);
   }
   $$('#sub button').forEach(function (b) { b.onclick = function () { showSub(b.dataset.sub); }; });
   function showTab(setup) {
-    inSetup = setup; inWizard = false; inSecurity = false;
-    $('#tab-wizard').classList.add('hide'); $('#tab-security').classList.add('hide'); secBtn.classList.remove('on');
+    inSetup = setup; inWizard = false; inSecurity = false; inAddSite = false;
+    $('#tab-wizard').classList.add('hide'); $('#tab-security').classList.add('hide'); $('#tab-addsite').classList.add('hide'); secBtn.classList.remove('on'); $('span', gear).textContent = 'Done';
     $('#tab-main').classList.toggle('hide', setup); $('#tab-setup').classList.toggle('hide', !setup);
     gear.classList.toggle('on', setup); gear.title = setup ? 'Back to the dashboard' : 'Settings';
     document.body.classList.toggle('in-setup', setup);
     if (setup) showSub(subPane); else if (snap) render(snap);
     window.scrollTo(0, 0);
   }
-  gear.onclick = function () { if (inWizard) closeWizard(); else showTab(inSecurity ? true : !inSetup); };
+  gear.onclick = function () { if (inAddSite) closeAddSite(); else if (inWizard) closeWizard(); else showTab(inSecurity ? true : !inSetup); };
 
   // the Security tab
   var secBtn = $('#secBtn');
   function openSecurity() {
-    inSecurity = true; inSetup = false; inWizard = false;
-    ['#tab-main', '#tab-setup', '#tab-wizard'].forEach(function (t) { $(t).classList.add('hide'); });
+    inSecurity = true; inSetup = false; inWizard = false; inAddSite = false;
+    ['#tab-main', '#tab-setup', '#tab-wizard', '#tab-addsite'].forEach(function (t) { $(t).classList.add('hide'); });
     $('#tab-security').classList.remove('hide');
     secBtn.classList.add('on'); gear.classList.remove('on'); gear.title = 'Settings'; $('span', gear).textContent = 'Done';
     document.body.classList.add('in-setup');

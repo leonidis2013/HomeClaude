@@ -28,6 +28,7 @@ const Net = require('./lib/netsec.js');
 const OAuth = require('./lib/oauth.js');
 const Totp = require('./lib/totp.js');
 const QR = require('./lib/qr.js');
+const Freeze = require('./lib/freeze.js');
 const pkg = require('./package.json');
 
 const args = process.argv.slice(2);
@@ -55,7 +56,11 @@ const DEFAULTS = {
   // ESPHome device configs through the ESPHome Device Builder. url: a standalone Device Builder; empty = the Home Assistant app
   esphome: { enabled: true, url: '' },
   security: { mode: 'local', allowTokenRemote: false, tokenScope: 'read', keyCheck: '', accessDefault: 'none', totp: { enabled: false, secret: '', pending: '', since: 0, lastCounter: 0, maxScope: 'build', off: false } },
-  setup: { completed: false, marks: {} }
+  setup: { completed: false, marks: {} },
+  // the Home Assistant above is the "home" site; more sites (another building) are in sites[]
+  home: { name: 'Home', color: '#4c8dff' },
+  freeze: { enabled: false, tz: '', windows: [] },
+  sites: []
 };
 
 function readJson(file, fallback) {
@@ -83,7 +88,7 @@ const savedCfg = DEMO ? {} : readJson(cfgPath, {});
 let cfg = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), savedCfg);
 // installs from before the setup guide already went through setup
 if (!savedCfg.setup && savedCfg.ha && savedCfg.ha.url) cfg.setup = { completed: true, marks: {} };
-['ha', 'access', 'backup', 'setup', 'security', 'review', 'esphome'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
+['ha', 'access', 'backup', 'setup', 'security', 'review', 'esphome', 'home'].forEach((k) => { cfg[k] = Object.assign({}, DEFAULTS[k], cfg[k] || {}); });
 cfg.access.blocked = Guard.cleanDomains(cfg.access.blocked);
 // ---------- permission levels ----------
 const LEVELS = ['read', 'build', 'hands', 'full'];
@@ -95,17 +100,76 @@ if (savedCfg.access && savedCfg.access.local == null) cfg.access.local = levelFr
 ['edit', 'services', 'delete', 'restart'].forEach((k) => { delete cfg.access[k]; });
 if (!LEVELS.includes(cfg.access.local)) cfg.access.local = 'read';
 if (!['read', 'build', 'hands'].includes(cfg.access.outsideMax)) cfg.access.outsideMax = 'hands';
-/** What a level allows. From outside: never above the outside ceiling, never above Hands on (no delete or restart). */
-function accessFor(level, remote) {
+/** What a level allows on a site. From outside: never above that site's outside ceiling, never above Hands on (no delete or restart). */
+function accessFor(level, remote, id) {
+  id = id && siteCfg(id) ? id : HOME;
+  const sc = siteCfg(id), acc = sc.access;
   let l = LEVELS.includes(level) ? level : 'read';
-  if (remote) l = lowerLevel(lowerLevel(l, cfg.access.outsideMax), 'hands');
+  if (remote) l = lowerLevel(lowerLevel(l, acc.outsideMax), 'hands');
   const f = LEVEL_FLAGS[l];
   // ESPHome: reading and validating come with every level while ESPHome is on; changing configs with Help build and up
-  const esp = !!cfg.esphome.enabled;
-  return { enabled: cfg.access.enabled, blocked: cfg.access.blocked, level: l, edit: !!f.edit, services: !!f.services, delete: !!f.delete, restart: !!f.restart, esphome: esp, esphomeEdit: esp && !!f.edit };
+  const esp = !!sc.esphome.enabled;
+  // the master switch (home's) turns every site off; each other site also has its own
+  return { enabled: !!(cfg.access.enabled && acc.enabled), blocked: acc.blocked, level: l, edit: !!f.edit, services: !!f.services, delete: !!f.delete, restart: !!f.restart, esphome: esp, esphomeEdit: esp && !!f.edit, frozen: frozenInfo(id), site: id };
 }
-const localAccess = () => accessFor(cfg.access.local, false);
+const localAccess = (id) => accessFor(siteCfg(id || HOME) ? siteCfg(id || HOME).access.local : 'read', false, id || HOME);
 if (!cfg.setup.marks || typeof cfg.setup.marks !== 'object') cfg.setup.marks = {};
+
+// ---------- sites: one HomeClaude, several Home Assistants ----------
+// "home" is the Home Assistant set up above (cfg.ha, cfg.access, cfg.esphome); every other site has the
+// same settings of its own in cfg.sites. Each site gets its own MCP endpoint: /mcp for home,
+// /site/<id>/mcp for the others, so a Claude connector only ever reaches the one it was added for.
+const HOME = 'home';
+const SITE_ID_RE = /^[a-z][a-z0-9-]{1,23}$/;
+const RESERVED_IDS = ['home', 'mcp', 'api', 'oauth', 'site', 'sites', 'all', 'events', 'well-known', 'healthz'];
+const SITE_COLORS = ['#4c8dff', '#2ec4b6', '#f2994a', '#bb6bd9', '#eb5757', '#e2b93b', '#27ae60', '#56ccf2'];
+const COLOR_RE = /^#[0-9a-f]{6}$/i;
+const MAX_SITES = 8;
+const cleanName = (v, d) => String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 40) || d;
+function siteDefaults(id) {
+  // a new site starts read-only, also from outside: raising it is a decision made on purpose
+  return { id, name: id.toUpperCase(), color: SITE_COLORS[1], ha: { url: '', token: '' }, esphome: { enabled: false, url: '' },
+    access: { enabled: true, local: 'read', outsideMax: 'read', blocked: Guard.DEFAULT_BLOCKED.slice() },
+    freeze: { enabled: false, tz: '', windows: [] }, marks: {}, createdAt: Date.now() };
+}
+function normalizeSite(x) {
+  const d = siteDefaults(x.id);
+  const s = Object.assign(d, x);
+  s.ha = Object.assign({}, d.ha, x.ha || {});
+  s.esphome = Object.assign({}, d.esphome, x.esphome || {});
+  s.access = Object.assign({}, d.access, x.access || {});
+  s.access.blocked = Guard.cleanDomains(s.access.blocked);
+  if (!LEVELS.includes(s.access.local)) s.access.local = 'read';
+  if (!['read', 'build', 'hands'].includes(s.access.outsideMax)) s.access.outsideMax = 'read';
+  s.freeze = Freeze.clean(x.freeze).freeze || d.freeze;
+  s.name = cleanName(s.name, d.name);
+  if (!COLOR_RE.test(s.color)) s.color = d.color;
+  if (!s.marks || typeof s.marks !== 'object') s.marks = {};
+  return s;
+}
+cfg.home.name = cleanName(cfg.home.name, 'Home');
+if (!COLOR_RE.test(cfg.home.color)) cfg.home.color = DEFAULTS.home.color;
+cfg.freeze = Freeze.clean(cfg.freeze).freeze || JSON.parse(JSON.stringify(DEFAULTS.freeze));
+cfg.sites = (Array.isArray(cfg.sites) ? cfg.sites : []).filter((x) => x && SITE_ID_RE.test(x.id) && !RESERVED_IDS.includes(x.id)).map(normalizeSite);
+
+/** A site's settings, as live references into c (so a changeConfig mutator can change them). */
+function siteCfg(id, c) {
+  c = c || cfg;
+  if (!id || id === HOME) return { id: HOME, meta: c.home, ha: c.ha, esphome: c.esphome, access: c.access, freeze: c.freeze, marks: null };
+  const s = (c.sites || []).find((x) => x.id === id);
+  return s ? { id, meta: s, ha: s.ha, esphome: s.esphome, access: s.access, freeze: s.freeze, marks: s.marks } : null;
+}
+const siteIds = () => [HOME].concat(cfg.sites.map((s) => s.id));
+const multiSite = () => cfg.sites.length > 0;
+const siteName = (id) => { const s = siteCfg(id); return s ? s.meta.name : String(id); };
+const sitePath = (id) => (!id || id === HOME ? '/mcp' : '/site/' + id + '/mcp');
+/** Is the service-time freeze on for this site right now? */
+function frozenInfo(id, now) {
+  const sc = siteCfg(id);
+  const a = sc && Freeze.active(sc.freeze, now);
+  if (!a) return null;
+  return { until: a.until, text: 'changes to ' + siteName(id) + ' are paused for ' + (a.label || 'a service time') + ' until ' + Freeze.untilText(a.until, sc.freeze, now) + '.' };
+}
 cfg.security.totp = Object.assign({}, DEFAULTS.security.totp, cfg.security.totp || {});
 
 function changeConfig(mutator) {
@@ -196,22 +260,64 @@ function pinOk(given) {
   return good;
 }
 
-// ---------- Home Assistant ----------
-const ha = DEMO ? require('./lib/demo.js').client() : Ha.create({ getUrl: () => cfg.ha.url, getToken: () => secrets.dec(cfg.ha.token) });
-const backups = Backups.create({ dir: path.join(dataDir, 'backups'), keep: () => cfg.backup.keep });
-const esphome = DEMO ? require('./lib/demo.js').esphome() : Esp.create({ ha, settings: () => cfg.esphome, version: pkg.version });
-const tools = Tools.create({ ha, backups, esphome, access: localAccess, onChange: (info, who) => recordChange(info, who), reviewInfo: () => reviewInfo() });
+// ---------- Home Assistant: one connection, backup folder, ESPHome link, tool set and MCP endpoint per site ----------
+const blankStatus = () => ({ ok: false, configured: false, checking: false, checkedAt: 0, error: '', version: '', name: '', ms: 0 });
+const runtimes = new Map();
+/** Who else is set up, so Claude on one site's connector knows the others exist (null with only one site). */
+function siteInfo(id) {
+  if (!multiSite()) return null;
+  return { id, name: siteName(id), others: siteIds().filter((x) => x !== id).map(siteName) };
+}
+function siteInstructions(id) {
+  if (!multiSite()) return Tools.INSTRUCTIONS;
+  const sc = siteCfg(id) || siteCfg(HOME), others = siteIds().filter((x) => x !== id).map(siteName);
+  return 'This connector is for the ' + siteName(id) + ' Home Assistant only (HomeClaude site "' + sc.id + '"). ' +
+    'The person also has HomeClaude for ' + others.join(', ') + ': those are separate Home Assistants with their own connectors, so make sure you are changing the one the person means. ' +
+    (sc.freeze.enabled ? 'Changes to ' + siteName(id) + ' are paused during its service times (' + Freeze.describe(sc.freeze) + ', ' + Freeze.effectiveTz(sc.freeze) + '); get_overview says when a pause is on. ' : '') +
+    Tools.INSTRUCTIONS;
+}
+function makeRuntime(id) {
+  const sc = () => siteCfg(id) || { ha: {}, esphome: { enabled: false, url: '' } };
+  const label = () => (id === HOME || !multiSite() ? '' : siteName(id));
+  const Demo = DEMO ? require('./lib/demo.js') : null;
+  const ha = DEMO ? Demo.client() : Ha.create({ getUrl: () => sc().ha.url, getToken: () => secrets.dec(sc().ha.token), label });
+  const backups = Backups.create({ dir: id === HOME ? path.join(dataDir, 'backups') : path.join(dataDir, 'sites', id, 'backups'), keep: () => cfg.backup.keep });
+  const esphome = DEMO ? Demo.esphome() : Esp.create({ ha, settings: () => sc().esphome, version: pkg.version });
+  const tools = Tools.create({ ha, backups, esphome, access: () => localAccess(id), onChange: (info, who) => recordChange(info, who, id), reviewInfo: () => reviewInfo(id), site: () => siteInfo(id) });
+  const R = { id, ha, backups, esphome, tools, status: blankStatus() };
+  R.mcp = Mcp.create({
+    serverInfo: () => ({ name: 'homeclaude', title: multiSite() ? 'HomeClaude (' + siteName(id) + ')' : 'HomeClaude (Home Assistant)', version: pkg.version }),
+    instructions: () => siteInstructions(id),
+    listTools: (who) => tools.list(who && who.access),
+    onListed: noteListed,
+    callTool: (name, a, who) => callTool(R, name, a, who)
+  });
+  return R;
+}
+/** The runtime of a site that exists, made on first use; null for a site that does not exist. */
+function rt(id) {
+  id = id || HOME;
+  if (!siteCfg(id)) return null;
+  let R = runtimes.get(id);
+  if (!R) { R = makeRuntime(id); runtimes.set(id, R); }
+  return R;
+}
+/** A site named in a request: home when not given, null when it does not exist. */
+const siteOf = (v) => { const id = v == null || v === '' ? HOME : String(v); return siteCfg(id) ? id : null; };
+const noSite = (v) => ({ ok: false, status: 404, error: 'There is no site "' + String(v).slice(0, 30) + '"' });
 
 // ---------- keep or revert: every change Claude makes goes live, and you decide afterwards ----------
 const REVIEW_TIMES = [0, 15, 60, 240, 1440];
 const clone = (x) => (x == null ? null : JSON.parse(JSON.stringify(x)));
-function recordChange(info, who) {
+const reviewSite = (r) => r.site || HOME;
+function recordChange(info, who, site) {
   if (!cfg.review.enabled) return null;
   const now = Date.now();
+  site = site || HOME;
   // a second change to the same thing while you have not answered: Revert still goes back to the very first version
-  let r = state.reviews.find((x) => x.status === 'waiting' && x.kind === info.kind && x.id === String(info.id));
+  let r = state.reviews.find((x) => x.status === 'waiting' && reviewSite(x) === site && x.kind === info.kind && x.id === String(info.id));
   if (!r) {
-    r = { rid: crypto.randomBytes(6).toString('hex'), kind: info.kind, id: String(info.id), before: clone(info.before), backup: info.backup || null, at: now, status: 'waiting', changes: 0 };
+    r = { rid: crypto.randomBytes(6).toString('hex'), site, kind: info.kind, id: String(info.id), before: clone(info.before), backup: info.backup || null, at: now, status: 'waiting', changes: 0 };
     // labels and categories: undone by the recorded steps of the first change
     if (info.revert) { r.revert = clone(info.revert); r.firstAction = info.action; }
     if (info.revertKeys) r.revertKeys = clone(info.revertKeys);
@@ -237,22 +343,25 @@ function trimReviews() {
   const done = state.reviews.filter((x) => x.status !== 'waiting').sort((a, b) => (b.decidedAt || 0) - (a.decidedAt || 0)).slice(0, 60);
   state.reviews = waiting.concat(done);
 }
-function reviewInfo() {
-  const day = Date.now() - 86400e3;
+function reviewInfo(site) {
+  const day = Date.now() - 86400e3, mine = (x) => reviewSite(x) === (site || HOME);
   return {
-    waiting: state.reviews.filter((x) => x.status === 'waiting').map((x) => ({ kind: x.kind, id: x.id, alias: x.alias, action: x.action, since: new Date(x.at).toISOString() })),
-    recently_reverted: state.reviews.filter((x) => x.status === 'reverted' && x.decidedAt > day).map((x) => ({ kind: x.kind, id: x.id, alias: x.alias, action: x.action, reverted: new Date(x.decidedAt).toISOString() }))
+    waiting: state.reviews.filter((x) => x.status === 'waiting' && mine(x)).map((x) => ({ kind: x.kind, id: x.id, alias: x.alias, action: x.action, since: new Date(x.at).toISOString() })),
+    recently_reverted: state.reviews.filter((x) => x.status === 'reverted' && x.decidedAt > day && mine(x)).map((x) => ({ kind: x.kind, id: x.id, alias: x.alias, action: x.action, reverted: new Date(x.decidedAt).toISOString() }))
   };
 }
 async function decideReview(rid, keep, by) {
   const r = state.reviews.find((x) => x.rid === rid);
   if (!r || r.status !== 'waiting') return { ok: false, error: 'That change was already answered' };
+  const R = rt(reviewSite(r));
+  if (!keep && !R) return { ok: false, error: 'The site this change was made on has been removed, so it cannot be reverted here. Choose Keep to clear it.' };
+  const { ha, tools, backups } = R || {};
   if (!keep && r.kind === 'esphome') {
-    try { await putEsphome(r.id, r.before && r.before.content, 'before-revert'); backupsChanged(); }
+    try { await putEsphome(R, r.id, r.before && r.before.content, 'before-revert'); backupsChanged(); }
     catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }
   } else if (!keep && r.revert) {
     try {
-      if (r.kind === 'dashboard') await backupDashboardNow(r.id, r.alias, 'before-revert');
+      if (r.kind === 'dashboard') await backupDashboardNow(R, r.id, r.alias, 'before-revert');
       // something already gone (deleted in Home Assistant meanwhile) is not a reason to stop
       for (const m of r.revert) { try { await tools.runStep(ha, m); } catch (e) { if (e.status !== 404) throw e; } }
       if (r.kind === 'dashboard') backupsChanged();
@@ -269,7 +378,7 @@ async function decideReview(rid, keep, by) {
     } catch (e) { return { ok: false, error: 'Could not revert: ' + e.message }; }
   }
   r.status = keep ? 'kept' : 'reverted'; r.decidedAt = Date.now(); r.by = by;
-  logActivity({ t: r.decidedAt, tool: (keep ? 'kept' : 'reverted') + ' (' + by + ')', args: r.kind + ' ' + r.alias + ' (' + r.action + ')', ok: true, ms: 0, write: !keep });
+  logActivity({ t: r.decidedAt, site: reviewSite(r), tool: (keep ? 'kept' : 'reverted') + ' (' + by + ')', args: r.kind + ' ' + r.alias + ' (' + r.action + ')', ok: true, ms: 0, write: !keep });
   trimReviews(); saveState(); broadcastSoon();
   return { ok: true };
 }
@@ -291,11 +400,14 @@ function setReview(b) {
     if (b.ifNoAnswer != null) { if (!['keep', 'revert'].includes(b.ifNoAnswer)) return 'Choose keep or revert'; c.review.ifNoAnswer = b.ifNoAnswer; }
   });
 }
-let haStatus = { ok: false, configured: false, checking: false, checkedAt: 0, error: '', version: '', name: '', ms: 0 };
-
-async function checkHa() {
-  if (!ha.configured()) { haStatus = { ok: false, configured: false, checkedAt: Date.now(), error: '', version: '', name: '' }; broadcastSoon(); return haStatus; }
-  haStatus = Object.assign({}, haStatus, { checking: true }); broadcastSoon();
+async function checkHa(id) {
+  const R = rt(id || HOME);
+  if (!R) return blankStatus();
+  const ha = R.ha;
+  const set = (v) => { R.status = v; return v; };
+  let haStatus = R.status;
+  if (!ha.configured()) { set({ ok: false, configured: false, checkedAt: Date.now(), error: '', version: '', name: '' }); broadcastSoon(); return R.status; }
+  set(Object.assign({}, haStatus, { checking: true })); broadcastSoon();
   const t0 = Date.now();
   try {
     const c = await ha.rest('GET', '/api/config', undefined, { timeoutMs: 8000 });
@@ -303,13 +415,14 @@ async function checkHa() {
     // logs, traces and configs are only open to administrators: find out now rather than at Claude's first question
     let admin = null;
     try { await ha.command({ type: 'system_log/list' }); admin = true; } catch (e) { if (e.status === 403 || /unauthor/i.test(e.message)) admin = false; }
-    haStatus = { ok: true, configured: true, checking: false, checkedAt: Date.now(), error: '', version: c.version || '', name: c.location_name || '', state: c.state || '', ms: Date.now() - t0, admin };
+    set({ ok: true, configured: true, checking: false, checkedAt: Date.now(), error: '', version: c.version || '', name: c.location_name || '', state: c.state || '', ms: Date.now() - t0, admin });
   } catch (e) {
-    haStatus = { ok: false, configured: true, checking: false, checkedAt: Date.now(), error: e.message, version: haStatus.version, name: haStatus.name, ms: 0 };
+    set({ ok: false, configured: true, checking: false, checkedAt: Date.now(), error: e.message, version: haStatus.version, name: haStatus.name, ms: 0 });
   }
   broadcastSoon();
-  return haStatus;
+  return R.status;
 }
+const checkAll = () => Promise.all(siteIds().map((id) => checkHa(id).catch(() => null)));
 
 // ---------- is HomeClaude itself healthy (storage, free space, memory, load) ----------
 let health = null, healthRunning = false;
@@ -337,49 +450,46 @@ function logActivity(entry) {
 function argSummary(a) {
   try { const s = JSON.stringify(a || {}); return s === '{}' ? '' : s.length > 220 ? s.slice(0, 217) + '...' : s; } catch (e) { return ''; }
 }
-/** A connection from outside: the level it was given, under the outside ceiling, never delete or restart. */
-const capAccess = (scope) => accessFor(scope, true);
+/** A connection from outside: the level it was given, under the site's outside ceiling, never delete or restart. */
+const capAccess = (scope, site) => accessFor(scope, true, site);
 const callLimit = Net.limiter({ max: 120, windowMs: 60e3, lockMs: 60e3 });
 
 /*
  * Claude's apps keep the tool list they loaded. When permissions change, the next answer to that
  * connection says so, once, so Claude can tell the person to reconnect instead of thinking it cannot do something.
  */
-const listed = new Map(); // who.key -> { names: Set, told: string }
+const listed = new Map(); // who.key|site -> { names: Set, told: string }
 const LVL_TEXT = { read: 'Look only', build: 'Help build', hands: 'Hands on', full: 'Full' };
-function noteListed(who, names) { if (who && who.key) listed.set(who.key, { names: new Set(names), told: '' }); }
+const listKey = (who) => who.key + '|' + (who.site || HOME);
+function noteListed(who, names) { if (who && who.key) listed.set(listKey(who), { names: new Set(names), told: '' }); }
 function toolsNotice(who) {
-  const seen = who && who.key && listed.get(who.key);
-  if (!seen) return '';
-  const now = tools.list(who.access).map((t) => t.name);
+  const seen = who && who.key && listed.get(listKey(who));
+  const R = who && rt(who.site);
+  if (!seen || !R) return '';
+  const now = R.tools.list(who.access).map((t) => t.name);
   const added = now.filter((n) => !seen.names.has(n)), removed = [...seen.names].filter((n) => !now.includes(n));
   if (!added.length && !removed.length) return '';
   const sig = added.join(',') + '|' + removed.join(',');
   if (seen.told === sig) return '';
   seen.told = sig;
-  const level = (who.access && who.access.level) || cfg.access.local;
+  const level = (who.access && who.access.level) || localAccess(who.site).level;
   return '[HomeClaude: this connection\'s permissions changed since your tool list was loaded. It is now ' + (LVL_TEXT[level] || level) + '.' +
     (added.length ? ' Now allowed, but not in your current tool list: ' + added.join(', ') + '.' : '') +
     (removed.length ? ' No longer allowed: ' + removed.join(', ') + '.' : '') +
     (added.length ? ' To use the new tools, the person needs to reload the HomeClaude connector (reconnect it, or start a new chat). Tell them so if they ask for something these tools do.' : '') + ']\n\n';
 }
-const mcp = Mcp.create({
-  serverInfo: { name: 'homeclaude', title: 'HomeClaude (Home Assistant)', version: pkg.version },
-  instructions: Tools.INSTRUCTIONS,
-  listTools: (who) => tools.list(who && who.access),
-  onListed: noteListed,
-  async callTool(name, a, who) {
-    const t0 = Date.now(), def = tools.all().find((x) => x.name === name);
-    if (who && who.remote && callLimit.locked(who.key)) return { isError: true, text: 'Too many requests from this connection. Wait a minute.' };
-    if (who && who.remote) callLimit.hit(who.key);
-    const r = await tools.call(name, a, who && who.access, who);
-    const notice = toolsNotice(who);
-    if (notice) r.text = notice + r.text;
-    if (def && def.needs) backupsChanged();
-    logActivity({ t: t0, tool: name, args: argSummary(a), ok: !r.isError, ms: Date.now() - t0, write: !!(def && def.needs), error: r.isError ? r.text.slice(0, 300) : undefined, who: who ? who.label : undefined, remote: !!(who && who.remote), ip: who ? who.ip : undefined });
-    return r;
-  }
-});
+/** A tool call on one site's endpoint. */
+async function callTool(R, name, a, who) {
+  const t0 = Date.now(), def = R.tools.all().find((x) => x.name === name);
+  if (who && who.remote && callLimit.locked(who.key)) return { isError: true, text: 'Too many requests from this connection. Wait a minute.' };
+  if (who && who.remote) callLimit.hit(who.key);
+  const r = await R.tools.call(name, a, who && who.access, who);
+  const notice = toolsNotice(who);
+  if (notice) r.text = notice + r.text;
+  if (def && def.needs) backupsChanged();
+  logActivity({ t: t0, site: R.id, tool: name, args: argSummary(a), ok: !r.isError, ms: Date.now() - t0, write: !!(def && def.needs), error: r.isError ? r.text.slice(0, 300) : undefined, who: who ? who.label : undefined, remote: !!(who && who.remote), ip: who ? who.ip : undefined });
+  return r;
+}
 
 function tokenOk(given) {
   const want = Buffer.from(mcpToken()), got = Buffer.from(String(given || ''));
@@ -388,11 +498,12 @@ function tokenOk(given) {
 
 const bearerOf = (req) => (/^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || '')) || [])[1];
 
-/** /mcp on the private port: the access token, from the header or the address. */
-function serveMcpLocal(req, res, pathToken) {
+/** /mcp (home) or /site/<id>/mcp on the private port: the access token, from the header or the address. */
+function serveMcpLocal(req, res, pathToken, site) {
   const send = (code, obj, extra) => { res.writeHead(code, Net.securityHeaders(Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, extra || {}))); res.end(obj == null ? '' : JSON.stringify(obj)); };
   if (!tokenOk(pathToken || bearerOf(req))) return setTimeout(() => send(401, { error: 'Missing or wrong HomeClaude access token' }, { 'www-authenticate': 'Bearer realm="HomeClaude"' }), 400);
-  runMcp(req, res, { label: 'This network', access: null, remote: false, ip: Net.clientIp(req, false), key: 'lan' });
+  if (!siteCfg(site)) return send(404, { error: 'There is no site "' + site + '" in HomeClaude' });
+  runMcp(req, res, { label: 'This network', access: null, remote: false, ip: Net.clientIp(req, false), key: 'lan', site: site || HOME });
 }
 
 function runMcp(req, res, who) {
@@ -403,6 +514,9 @@ function runMcp(req, res, who) {
   if (req.method === 'GET' || req.method === 'DELETE') return send(405, { error: 'Use POST' }, { allow: 'POST' });
   if (req.method !== 'POST') return send(405, { error: 'Use POST' }, { allow: 'POST' });
   if (!cfg.access.enabled) return send(503, { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Claude access is switched off in HomeClaude' } });
+  const R = rt(who.site);
+  if (!R) return send(404, { error: 'There is no such site in HomeClaude' });
+  if (!siteCfg(who.site).access.enabled) return send(503, { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Claude access to ' + siteName(who.site) + ' is switched off in HomeClaude' } });
 
   const chunks = []; let size = 0, tooBig = false;
   req.on('data', (d) => { size += d.length; if (size > 2 * 1024 * 1024) tooBig = true; else chunks.push(d); });
@@ -411,7 +525,7 @@ function runMcp(req, res, who) {
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { return send(400, Mcp.parseError()); }
     try {
-      const out = await mcp.handle(body, req.headers, who);
+      const out = await R.mcp.handle(body, req.headers, who);
       if (out == null) { res.writeHead(202); return res.end(); }
       send(200, out);
     } catch (e) {
@@ -423,44 +537,110 @@ function runMcp(req, res, who) {
 // ---------- settings from the web page ----------
 const clean = (s, n) => String(s == null ? '' : s).trim().slice(0, n);
 
+// every one of these takes an optional "site" (home when left out)
 function setHa(b) {
   if (DEMO) return { ok: false, error: 'Demo mode: Home Assistant is simulated' };
+  const site = siteOf(b.site);
+  if (!site) return noSite(b.site);
   const url = clean(b.url, 300).replace(/\/+$/, '');
   if (url && !/^https?:\/\/[^\s/]+(:\d+)?(\/[^\s]*)?$/i.test(url)) return { ok: false, error: 'The address should look like http://192.168.1.10:8123' };
   const r = changeConfig((c) => {
-    c.ha.url = url;
-    if (b.token != null && String(b.token).trim()) c.ha.token = secrets.enc(String(b.token).trim().slice(0, 1000));
-    if (b.clearToken) c.ha.token = '';
+    const sc = siteCfg(site, c);
+    sc.ha.url = url;
+    if (b.token != null && String(b.token).trim()) sc.ha.token = secrets.enc(String(b.token).trim().slice(0, 1000));
+    if (b.clearToken) sc.ha.token = '';
   });
-  if (r.ok) { ha.reset(); esphome.forget(); checkHa(); }
+  if (r.ok) { const R = rt(site); R.ha.reset(); R.esphome.forget(); checkHa(site); }
   return r;
 }
 
 function setEsphome(b) {
-  const url = clean(b.url == null ? cfg.esphome.url : b.url, 300).replace(/\/+$/, '');
+  const site = siteOf(b.site);
+  if (!site) return noSite(b.site);
+  const url = clean(b.url == null ? siteCfg(site).esphome.url : b.url, 300).replace(/\/+$/, '');
   if (url && !/^https?:\/\/[^\s/]+(:\d+)?(\/[^\s]*)?$/i.test(url)) return { ok: false, error: 'The address should look like http://192.168.1.10:6052, or leave it empty to use the ESPHome app in Home Assistant' };
   const r = changeConfig((c) => {
-    if (typeof b.enabled === 'boolean') c.esphome.enabled = b.enabled;
-    c.esphome.url = url;
+    const sc = siteCfg(site, c);
+    if (typeof b.enabled === 'boolean') sc.esphome.enabled = b.enabled;
+    sc.esphome.url = url;
   });
-  if (r.ok) { esphome.forget(); if (cfg.esphome.enabled) esphome.check().then(broadcastSoon); else broadcastSoon(); }
+  if (r.ok) { const R = rt(site); R.esphome.forget(); if (siteCfg(site).esphome.enabled) R.esphome.check().then(broadcastSoon).catch(() => {}); else broadcastSoon(); }
   return r;
 }
 
 function setAccess(b) {
+  const site = siteOf(b.site);
+  if (!site) return noSite(b.site);
   return changeConfig((c) => {
-    if (typeof b.enabled === 'boolean') c.access.enabled = b.enabled;
-    if (b.local != null) { if (!LEVELS.includes(b.local)) return 'Unknown level'; c.access.local = b.local; }
-    if (b.outsideMax != null) { if (!['read', 'build', 'hands'].includes(b.outsideMax)) return 'From outside the highest level is Hands on'; c.access.outsideMax = b.outsideMax; }
+    const a = siteCfg(site, c).access;
+    if (typeof b.enabled === 'boolean') a.enabled = b.enabled;
+    if (b.local != null) { if (!LEVELS.includes(b.local)) return 'Unknown level'; a.local = b.local; }
+    if (b.outsideMax != null) { if (!['read', 'build', 'hands'].includes(b.outsideMax)) return 'From outside the highest level is Hands on'; a.outsideMax = b.outsideMax; }
     // the older switch names still work (setup guide, scripts): they adjust the level for your network
     if (['edit', 'services', 'delete', 'restart'].some((k) => typeof b[k] === 'boolean')) {
-      const f = Object.assign({}, LEVEL_FLAGS[c.access.local]);
+      const f = Object.assign({}, LEVEL_FLAGS[a.local]);
       ['edit', 'services', 'delete', 'restart'].forEach((k) => { if (typeof b[k] === 'boolean') f[k] = b[k]; });
       if (!f.edit) { f.services = false; f.delete = false; f.restart = false; }
-      c.access.local = levelFromFlags(f);
+      a.local = levelFromFlags(f);
     }
-    if (b.blocked != null) c.access.blocked = Guard.cleanDomains(b.blocked);
+    if (b.blocked != null) a.blocked = Guard.cleanDomains(b.blocked);
   });
+}
+
+// ---------- adding, changing and removing sites ----------
+const SITE_MARKS = ['perms', 'freeze', 'claude'];
+function siteAction(b) {
+  const act = String(b.action || '');
+  if (act === 'add') {
+    if (DEMO) return { ok: false, error: 'Demo mode has one simulated Home Assistant' };
+    const id = String(b.id || '').trim().toLowerCase();
+    if (!SITE_ID_RE.test(id)) return { ok: false, error: 'The short name needs 2 to 24 lowercase letters, digits or dashes, starting with a letter (for example rhcc). It goes in the connector address' };
+    if (RESERVED_IDS.includes(id)) return { ok: false, error: '"' + id + '" is reserved. Choose another short name' };
+    if (siteCfg(id)) return { ok: false, error: 'There is already a site called ' + id };
+    if (cfg.sites.length >= MAX_SITES) return { ok: false, error: 'At most ' + MAX_SITES + ' extra sites' };
+    const used = [cfg.home.color].concat(cfg.sites.map((x) => x.color));
+    const color = COLOR_RE.test(b.color) ? b.color : SITE_COLORS.find((x) => !used.includes(x)) || SITE_COLORS[1];
+    const r = changeConfig((c) => { c.sites.push(normalizeSite({ id, name: cleanName(b.name, id.toUpperCase()), color })); });
+    if (r.ok) { rt(id); broadcastSoon(); }
+    return r.ok ? { ok: true, id } : r;
+  }
+  const site = siteOf(b.site);
+  if (!site) return noSite(b.site);
+  if (act === 'update') {
+    let fz = null;
+    if (b.freeze != null) { const f = Freeze.clean(b.freeze, siteCfg(site).freeze); if (f.error) return { ok: false, error: f.error }; fz = f.freeze; }
+    if (b.color != null && !COLOR_RE.test(b.color)) return { ok: false, error: 'Pick a color' };
+    const r = changeConfig((c) => {
+      const sc = siteCfg(site, c);
+      if (b.name != null) sc.meta.name = cleanName(b.name, sc.meta.name);
+      if (b.color != null) sc.meta.color = b.color;
+      if (fz) Object.assign(sc.freeze, fz);
+    });
+    if (r.ok) broadcastSoon();
+    return r;
+  }
+  if (act === 'mark') {
+    if (site === HOME) return { ok: false, error: 'The home site uses the setup guide' };
+    if (!SITE_MARKS.includes(b.mark)) return { ok: false, error: 'Unknown step' };
+    return changeConfig((c) => {
+      const m = siteCfg(site, c).marks;
+      if (b.value === false || b.value == null) delete m[b.mark]; else m[b.mark] = b.value === 'skip' ? 'skip' : true;
+    });
+  }
+  if (act === 'remove') {
+    if (site === HOME) return { ok: false, error: 'The home site cannot be removed' };
+    const r = changeConfig((c) => { c.sites = c.sites.filter((x) => x.id !== site); });
+    if (!r.ok) return r;
+    const R = runtimes.get(site);
+    if (R) { try { R.ha.reset(); } catch (e) { /* fine */ } runtimes.delete(site); }
+    // its connections from outside stop at once; changes still waiting can only be kept (cleared) now
+    const n = oauth.revokeSite(site, 'its site was removed from HomeClaude');
+    state.reviews.forEach((x) => { if (x.status === 'waiting' && reviewSite(x) === site) { x.status = 'withdrawn'; x.decidedAt = Date.now(); x.by = 'site removed'; } });
+    saveState();
+    securityEvent('site-removed', { site, revoked: n });
+    return { ok: true, revoked: n };
+  }
+  return { ok: false, error: 'Unknown action' };
 }
 
 function changeSettings(b) {
@@ -492,7 +672,8 @@ function newToken() {
 
 // ---------- dashboards: backed up and restored through Home Assistant's WebSocket API ----------
 const dashUrl = (id) => (id === 'lovelace' ? null : id);
-async function dashboardNow(id) {
+async function dashboardNow(R, id) {
+  const ha = R.ha;
   const list = (await ha.command({ type: 'lovelace/dashboards/list' })) || [];
   const d = id === 'lovelace' ? { url_path: 'lovelace', title: 'Overview' } : list.find((x) => x.url_path === id) || null;
   if (!d) return null;
@@ -501,16 +682,17 @@ async function dashboardNow(id) {
   catch (e) { if (!(e.code === 'config_not_found' || /no config found/i.test(e.message))) throw e; }
   return { d, config };
 }
-async function backupDashboardNow(id, alias, reason) {
-  const now = await dashboardNow(id);
+async function backupDashboardNow(R, id, alias, reason) {
+  const now = await dashboardNow(R, id);
   if (!now) return;
   const d = now.d;
-  backups.save('dashboard', id, { alias: d.title || alias, dashboard: id === 'lovelace' ? null : { url_path: d.url_path, title: d.title, icon: d.icon || null, show_in_sidebar: d.show_in_sidebar !== false, require_admin: !!d.require_admin }, config: now.config }, reason);
+  R.backups.save('dashboard', id, { alias: d.title || alias, dashboard: id === 'lovelace' ? null : { url_path: d.url_path, title: d.title, icon: d.icon || null, show_in_sidebar: d.show_in_sidebar !== false, require_admin: !!d.require_admin }, config: now.config }, reason);
 }
-async function restoreDashboard(id, bk) {
+async function restoreDashboard(R, id, bk) {
+  const ha = R.ha;
   const body = bk.config || {};
-  const now = await dashboardNow(id);
-  if (now) await backupDashboardNow(id, body.alias, 'before-restore');
+  const now = await dashboardNow(R, id);
+  if (now) await backupDashboardNow(R, id, body.alias, 'before-restore');
   if (!now && id !== 'lovelace') {
     if (!body.dashboard) throw new Error('The backup does not say how the dashboard was set up');
     const s = body.dashboard;
@@ -521,31 +703,34 @@ async function restoreDashboard(id, bk) {
 }
 
 /** Puts an ESPHome file back to the given text, backing up what is there now. */
-async function putEsphome(file, content, reason) {
+async function putEsphome(R, file, content, reason) {
   if (typeof content !== 'string') throw new Error('Nothing to put back');
-  const now = await esphome.read(file);
+  const now = await R.esphome.read(file);
   if (now === content) return;
-  backups.save('esphome', file, { alias: file, content: now }, reason);
-  await esphome.write(file, content, now);
+  R.backups.save('esphome', file, { alias: file, content: now }, reason);
+  await R.esphome.write(file, content, now);
 }
 
 async function restore(b) {
+  const site = siteOf(b.site);
+  if (!site) return noSite(b.site);
+  const R = rt(site), ha = R.ha, backups = R.backups;
   const kind = String(b.kind || ''), id = String(b.id || ''), file = String(b.file || '');
   const bk = backups.read(kind, id, file);
   if (!bk || (!bk.config && kind !== 'dashboard')) return { ok: false, error: 'That backup is gone' };
   if (kind === 'esphome') {
     try {
-      await putEsphome(id, (bk.config || {}).content, 'before-restore');
+      await putEsphome(R, id, (bk.config || {}).content, 'before-restore');
       backupsChanged();
-      logActivity({ t: Date.now(), tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
+      logActivity({ t: Date.now(), site, tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
       return { ok: true };
     } catch (e) { return { ok: false, error: e.message }; }
   }
   if (kind === 'dashboard') {
     try {
-      await restoreDashboard(id, bk);
+      await restoreDashboard(R, id, bk);
       backupsChanged();
-      logActivity({ t: Date.now(), tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
+      logActivity({ t: Date.now(), site, tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
       return { ok: true };
     } catch (e) { return { ok: false, error: e.message }; }
   }
@@ -555,7 +740,7 @@ async function restore(b) {
     if (current) backups.save(kind, id, current, 'before-restore');
     await ha.rest('POST', '/api/config/' + kind + '/config/' + encodeURIComponent(id), bk.config);
     backupsChanged();
-    logActivity({ t: Date.now(), tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
+    logActivity({ t: Date.now(), site, tool: 'restore (HomeClaude page)', args: kind + ' ' + id + ' from ' + file, ok: true, ms: 0, write: true });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 }
@@ -631,6 +816,7 @@ const oauth = OAuth.create({
     oauthSaveTimer = setTimeout(() => { try { writeJson(oauthPath, db); } catch (e) { lastWriteError = { at: Date.now(), message: e.code || e.message }; runHealth(); } }, 100);
   },
   base: () => cfg.publicUrl,
+  sites: () => siteIds().map((id) => ({ id, name: siteName(id) })),
   event: (type, d) => securityEvent(type, d)
 });
 const exposed = () => cfg.security.mode === 'exposed';
@@ -689,7 +875,7 @@ function securitySnapshot() {
     mode: cfg.security.mode, publicUrl: cfg.publicUrl, accessDefault: cfg.security.accessDefault, publicPort: PUBLIC_PORT, adminPort: PORT,
     allowTokenRemote: cfg.security.allowTokenRemote, tokenScope: cfg.security.tokenScope,
     keyWhere: DEMO ? 'demo' : secrets.where(), keyFileOnVolume: !DEMO && secrets.hasFileKey(), keyMismatch,
-    pending: oauth.listPending(), connections: oauth.connections().map((c) => Object.assign(c, { effective: accessFor(c.scope, true).level })), events: state.security.slice(0, 80), selfTest,
+    pending: oauth.listPending(), connections: oauth.connections().map((c) => Object.assign(c, { effective: accessFor(c.scope, true, siteCfg(c.site) ? c.site : HOME).level, orphan: !siteCfg(c.site) })), events: state.security.slice(0, 80), selfTest,
     totp: (() => { const t = cfg.security.totp, now = Date.now(); return { enabled: !!t.enabled, since: t.since, maxScope: t.maxScope, off: !!t.off, failsToday: state.totpFails.filter((x) => x > now - 86400e3).length, paused: state.totpFails.filter((x) => x > now - 3600e3).length >= 5 }; })()
   };
 }
@@ -712,18 +898,36 @@ function setupAction(b) {
 let bkCache = { n: 0, at: 0 };
 function backupCount() {
   if (DEMO) return 0;
-  if (Date.now() - bkCache.at > 5000) { try { bkCache = { n: backups.list().length, at: Date.now() }; } catch (e) { bkCache.at = Date.now(); } }
+  if (Date.now() - bkCache.at > 5000) { try { bkCache = { n: siteIds().reduce((n, id) => n + rt(id).backups.list().length, 0), at: Date.now() }; } catch (e) { bkCache.at = Date.now(); } }
   return bkCache.n;
 }
 const backupsChanged = () => { bkCache.at = 0; };
 function describeTools() {
   const a = localAccess();
-  return tools.all().map((t) => ({ name: t.name, title: t.title, needs: t.needs || null, on: !t.needs || !!a[t.needs] }));
+  return rt(HOME).tools.all().map((t) => ({ name: t.name, title: t.title, needs: t.needs || null, on: !t.needs || !!a[t.needs] }));
+}
+/** What the page shows for one site. */
+function siteSnapshot(id) {
+  const sc = siteCfg(id), R = rt(id), a = localAccess(id);
+  const last = state.activity.find((x) => (x.site || HOME) === id);
+  return {
+    id, name: sc.meta.name, color: sc.meta.color, primary: id === HOME, path: sitePath(id),
+    ha: { url: DEMO ? R.ha.base() : sc.ha.url, hasToken: DEMO || !!sc.ha.token, status: R.status },
+    access: { enabled: !!sc.access.enabled, local: sc.access.local, outsideMax: sc.access.outsideMax, blocked: sc.access.blocked, level: a.level },
+    esphome: { enabled: !!sc.esphome.enabled, url: sc.esphome.url, status: R.esphome.status() },
+    freeze: Object.assign({}, sc.freeze, { tzEffective: Freeze.effectiveTz(sc.freeze), text: Freeze.describe(sc.freeze) }),
+    frozen: a.frozen ? { until: a.frozen.until, text: a.frozen.text, untilText: Freeze.untilText(a.frozen.until, sc.freeze) } : null,
+    marks: sc.marks, waiting: state.reviews.filter((x) => x.status === 'waiting' && reviewSite(x) === id).length,
+    connections: oauth.connections().filter((c) => c.site === id).length,
+    lastCallAt: last ? last.t : 0
+  };
 }
 function snapshot() {
+  const home = rt(HOME);
   return {
     version: pkg.version, now: Date.now(), demo: DEMO,
-    ha: { url: DEMO ? ha.base() : cfg.ha.url, hasToken: DEMO || !!cfg.ha.token, status: haStatus },
+    sites: siteIds().map(siteSnapshot), maxSites: MAX_SITES, defaultTz: Freeze.defaultTz(),
+    ha: { url: DEMO ? home.ha.base() : cfg.ha.url, hasToken: DEMO || !!cfg.ha.token, status: home.status },
     access: Object.assign({}, cfg.access, localAccess()),
     tools: describeTools(),
     publicUrl: cfg.publicUrl,
@@ -734,7 +938,7 @@ function snapshot() {
     lastCallAt: state.lastCallAt || 0,
     pinRequired: pinSet(),
     review: cfg.review,
-    esphome: { enabled: !!cfg.esphome.enabled, url: cfg.esphome.url, status: esphome.status() },
+    esphome: { enabled: !!cfg.esphome.enabled, url: cfg.esphome.url, status: home.esphome.status() },
     reviews: state.reviews.slice(0, 40),
     health,
     security: securitySnapshot(),
@@ -847,7 +1051,10 @@ const server = http.createServer((req, res) => {
 
   // Claude Code on your network: /mcp with "Authorization: Bearer <token>", or /mcp/<token> for apps that only take a URL
   const m = /^\/mcp(?:\/([A-Za-z0-9_-]{1,200}))?\/?$/.exec(url);
-  if (m) return serveMcpLocal(req, res, m[1]);
+  if (m) return serveMcpLocal(req, res, m[1], HOME);
+  // another site: /site/<id>/mcp, or /site/<id>/mcp/<token>
+  const ms = /^\/site\/([a-z][a-z0-9-]{1,23})\/mcp(?:\/([A-Za-z0-9_-]{1,200}))?\/?$/.exec(url);
+  if (ms) return serveMcpLocal(req, res, ms[2], ms[1]);
 
   if (req.method === 'GET' && FILES[url]) {
     const [file, type] = FILES[url];
@@ -868,22 +1075,37 @@ const server = http.createServer((req, res) => {
     req.on('close', () => clients.delete(res));
     return;
   }
-  if (req.method === 'GET' && url === '/api/backups') return json(res, 200, { backups: DEMO ? [] : backups.list() });
+  if (req.method === 'GET' && url === '/api/backups') {
+    const site = siteOf(u.searchParams.get('site'));
+    if (!site) return json(res, 404, { backups: [], error: 'No such site' });
+    return json(res, 200, { site, backups: DEMO ? [] : rt(site).backups.list() });
+  }
   if (req.method === 'GET' && url === '/api/backup') {
     const bip = Net.clientIp(req, false);
     if (pinLimit.locked(bip)) { res.writeHead(429); return res.end('Too many wrong PINs'); }
     if (!pinOk(u.searchParams.get('pin') || req.headers['x-pin'])) { pinLimit.hit(bip); res.writeHead(401); return res.end('Wrong or missing PIN'); }
-    const p = backups.filePath(u.searchParams.get('kind') || '', u.searchParams.get('id') || '', u.searchParams.get('file') || '');
+    const bsite = siteOf(u.searchParams.get('site'));
+    const p = bsite && rt(bsite).backups.filePath(u.searchParams.get('kind') || '', u.searchParams.get('id') || '', u.searchParams.get('file') || '');
     if (!p) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="' + (u.searchParams.get('kind') + '-' + u.searchParams.get('id') + '-' + path.basename(p)).replace(/[^A-Za-z0-9_.-]/g, '_') + '"' });
     return fs.createReadStream(p).pipe(res);
   }
 
   if (req.method === 'POST' && url === '/api/ha') return postJson(req, res, setHa);
-  if (req.method === 'POST' && url === '/api/ha-test') return postJson(req, res, () => checkHa().then((s) => ({ ok: s.ok, error: s.ok ? undefined : (s.error || 'Home Assistant is not set up yet') })), { needPin: false });
+  if (req.method === 'POST' && url === '/api/ha-test') return postJson(req, res, (b) => {
+    if (b.all) return checkAll().then(() => ({ ok: siteIds().every((id) => rt(id).status.ok || !rt(id).status.configured), error: siteIds().filter((id) => rt(id).status.configured && !rt(id).status.ok).map((id) => siteName(id) + ': ' + rt(id).status.error).join(' · ') || undefined }));
+    const site = siteOf(b.site);
+    if (!site) return noSite(b.site);
+    return checkHa(site).then((s) => ({ ok: s.ok, error: s.ok ? undefined : (s.error || 'Home Assistant is not set up yet') }));
+  }, { needPin: false });
   if (req.method === 'POST' && url === '/api/access') return postJson(req, res, setAccess);
   if (req.method === 'POST' && url === '/api/esphome') return postJson(req, res, setEsphome);
-  if (req.method === 'POST' && url === '/api/esphome-test') return postJson(req, res, () => esphome.check().then((s) => { broadcastSoon(); return { ok: s.ok, error: s.ok ? undefined : s.error, devices: s.devices }; }), { needPin: false });
+  if (req.method === 'POST' && url === '/api/esphome-test') return postJson(req, res, (b) => {
+    const site = siteOf(b.site);
+    if (!site) return noSite(b.site);
+    return rt(site).esphome.check().then((s) => { broadcastSoon(); return { ok: s.ok, error: s.ok ? undefined : s.error, devices: s.devices }; });
+  }, { needPin: false });
+  if (req.method === 'POST' && url === '/api/sites') return postJson(req, res, siteAction);
   if (req.method === 'POST' && url === '/api/token') return postJson(req, res, (b) => (b.regenerate ? newToken() : { ok: true, token: mcpToken() }));
   if (req.method === 'POST' && url === '/api/settings') return postJson(req, res, changeSettings);
   if (req.method === 'POST' && url === '/api/restore') return postJson(req, res, (b) => (DEMO ? { ok: false, error: 'Demo mode has no backups' } : restore(b)));
@@ -962,7 +1184,11 @@ const publicServer = http.createServer(async (req, res) => {
     if (left) return send(429, { error: 'Too many failed attempts. Try again later.' }, { 'retry-after': String(left) });
 
     // discovery
-    if (req.method === 'GET' && (url === '/.well-known/oauth-protected-resource' || url === '/.well-known/oauth-protected-resource/mcp')) return send(200, oauth.resourceMetadata(), { 'cache-control': 'max-age=300' });
+    const prm = /^\/\.well-known\/oauth-protected-resource(?:\/mcp|\/site\/([a-z][a-z0-9-]{1,23})\/mcp)?$/.exec(url);
+    if (req.method === 'GET' && prm) {
+      if (prm[1] && !siteCfg(prm[1])) return send(404, { error: 'Not found' });
+      return send(200, oauth.resourceMetadata(prm[1] || HOME), { 'cache-control': 'max-age=300' });
+    }
     if (req.method === 'GET' && url === '/.well-known/oauth-authorization-server') return send(200, oauth.serverMetadata(), { 'cache-control': 'max-age=300' });
 
     // sign-in
@@ -993,16 +1219,21 @@ const publicServer = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url === '/oauth/revoke') { const r = await oauth.revokeToken(parseForm(req, await readBody(req, 16384)), basicAuth(req)); return send(r.status, r.body); }
 
-    // Claude's endpoint
-    if (url === '/mcp' || url === '/mcp/') {
+    // Claude's endpoints: /mcp for home, /site/<id>/mcp for each other site
+    const pm = url === '/mcp' || url === '/mcp/' ? [url, null] : /^\/site\/([a-z][a-z0-9-]{1,23})\/mcp\/?$/.exec(url);
+    if (pm) {
+      const site = pm[1] || HOME;
+      if (!siteCfg(site)) return send(404, { error: 'Not found' });
       const tok = bearerOf(req);
-      const challenge = 'Bearer resource_metadata="' + cfg.publicUrl + '/.well-known/oauth-protected-resource", scope="homeclaude"';
-      const grant = oauth.verify(tok, ip);
+      const challenge = 'Bearer resource_metadata="' + cfg.publicUrl + '/.well-known/oauth-protected-resource' + (site === HOME ? '' : '/site/' + site + '/mcp') + '", scope="homeclaude"';
+      const grant = oauth.verify(tok, ip, site);
       let who = null;
-      if (grant) who = { label: grant.clientName, access: capAccess(grant.scope), remote: true, ip, key: grant.id };
-      else if (tok && cfg.security.allowTokenRemote && tokenOk(tok)) who = { label: 'Access token (outside)', access: capAccess(cfg.security.tokenScope), remote: true, ip, key: 'token' };
+      // a real connection for another site: send it to sign in again for this one, without counting it as an attack
+      if (grant && grant.wrongSite) return send(401, { error: 'invalid_token', error_description: 'This connection was approved for another site' }, { 'www-authenticate': challenge + ', error="invalid_token"' });
+      if (grant) who = { label: grant.clientName, access: capAccess(grant.scope, site), remote: true, ip, key: grant.id, site };
+      else if (tok && cfg.security.allowTokenRemote && tokenOk(tok)) who = { label: 'Access token (outside)', access: capAccess(cfg.security.tokenScope, site), remote: true, ip, key: 'token', site };
       if (!who) {
-        if (tok) publicFail(ip, 'bad token on /mcp');
+        if (tok) publicFail(ip, 'bad token on ' + sitePath(site));
         return setTimeout(() => send(401, { error: tok ? 'invalid_token' : 'Sign-in required' }, { 'www-authenticate': challenge + (tok ? ', error="invalid_token"' : '') }), tok ? 300 : 0);
       }
       if (!cfg.access.enabled) return send(503, { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Claude access is switched off in HomeClaude' } });
@@ -1022,18 +1253,21 @@ setInterval(broadcastSoon, 1500).unref();
 function start() {
   mcpToken();
   if (!DEMO && UPDATE_CHECK) { setTimeout(checkSelfUpdate, 5000).unref(); setInterval(checkSelfUpdate, 6 * 3600 * 1000).unref(); }
-  setTimeout(checkHa, DEMO ? 200 : 1000).unref();
+  setTimeout(checkAll, DEMO ? 200 : 1000).unref();
   runHealth(); setInterval(runHealth, 60000).unref();
   setInterval(reviewTimer, Number(process.env.HOMECLAUDE_REVIEW_TICK_MS) || 15000).unref();
-  setInterval(checkHa, 60000).unref();
+  setInterval(checkAll, 60000).unref();
+  // the page shows when a service-time freeze starts and ends
+  let frozenSig = '';
+  setInterval(() => { const sig = siteIds().map((id) => (frozenInfo(id) ? id : '')).join(','); if (sig !== frozenSig) { frozenSig = sig; broadcastSoon(); } }, 20000).unref();
   // ESPHome: find the Device Builder once Home Assistant answers, then look again now and then (the page shows it)
-  const espCheck = () => { if (cfg.esphome.enabled && ha.configured()) esphome.check().then(broadcastSoon).catch(() => {}); };
+  const espCheck = () => siteIds().forEach((id) => { const R = rt(id); if (siteCfg(id).esphome.enabled && R.ha.configured()) R.esphome.check().then(broadcastSoon).catch(() => {}); });
   setTimeout(espCheck, 8000).unref(); setInterval(espCheck, 10 * 60e3).unref();
   publicServer.on('error', (e) => console.error('Public port ' + PUBLIC_PORT + ': ' + e.message));
   publicServer.listen(PUBLIC_PORT, '0.0.0.0', () => console.log('Public port ' + PUBLIC_PORT + ': ' + (exposed() ? 'exposed mode, Claude sign-in and /mcp only' : 'local mode, serves nothing')));
   server.listen(PORT, '0.0.0.0', () => {
     console.log('HomeClaude v' + pkg.version + ' on http://localhost:' + PORT + (DEMO ? ' (demo: simulated Home Assistant, access token "demo")' : ''));
-    console.log('Claude connects to http://<this machine>:' + PORT + '/mcp');
+    console.log('Claude connects to http://<this machine>:' + PORT + '/mcp' + (multiSite() ? ' (' + cfg.home.name + '), and ' + cfg.sites.map((x) => '/site/' + x.id + '/mcp (' + x.name + ')').join(', ') : ''));
     if (!pinSet()) console.log('Note: anyone on this network can open this page and see the access token. Set a control PIN in Settings to require one.');
   });
 }
